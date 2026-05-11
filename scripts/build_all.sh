@@ -1,11 +1,6 @@
 #!/bin/bash
 set -e
 
-# ============================================
-#  PermanentStore - 完整编译 ldid + zsign + OpenSSL
-#  所有代码都编译进静态库
-# ============================================
-
 IOS_MIN="12.0"
 ARCH="arm64"
 SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -22,23 +17,29 @@ rm -rf "$BUILD" "$OUT"
 mkdir -p "$BUILD" "$OUT/lib" "$OUT/include"
 
 # ============================================
-# 1. OpenSSL
+# 1. OpenSSL（只编译库，不编译 apps）
 # ============================================
 echo "📦 编译 OpenSSL..."
 cd "$BUILD"
 git clone --depth 1 https://github.com/openssl/openssl.git
 cd openssl
 
-./Configure ios64-cross no-shared no-dso no-tests no-asm \
+./Configure ios64-cross no-shared no-dso no-tests no-asm no-apps \
     --prefix="$OUT" --sysroot="$SYSROOT" -mios-version-min=$IOS_MIN
 
 sed -i '' "s|-isysroot /SDKs/|-isysroot $SYSROOT|g" Makefile
-make -j$(sysctl -n hw.logicalcpu) build_sw 2>&1 | tail -3
-make install_sw 2>&1 | tail -3
+
+# 关键：只编译 libcrypto 和 libssl，不编译 apps
+make -j$(sysctl -n hw.logicalcpu) libcrypto.a libssl.a 2>&1 | tail -5
+
+# 手动安装
+cp libcrypto.a libssl.a "$OUT/lib/"
+cp -r include/openssl "$OUT/include/"
+
 echo "✅ OpenSSL 完成"
 
 # ============================================
-# 2. ldid
+# 2. ldid（链 OpenSSL）
 # ============================================
 echo "📦 编译 ldid..."
 cd "$BUILD"
@@ -49,7 +50,10 @@ for f in *.cpp *.cc *.c; do
     [ ! -f "$f" ] && continue
     [[ "$f" == "main."* ]] && continue
     echo "  $f"
-    $CXX -c "$f" -o "${f%.*}.o" -I. -std=c++17 -O2 || echo "  跳过"
+    $CXX -c "$f" -o "${f%.*}.o" \
+        -I. \
+        -I"$OUT/include" \
+        -std=c++17 -O2 || echo "  跳过"
 done
 
 $AR rcs "$OUT/lib/libldid.a" *.o 2>/dev/null
@@ -58,7 +62,7 @@ cp *.h *.hpp "$OUT/include/" 2>/dev/null || true
 echo "✅ ldid 完成"
 
 # ============================================
-# 3. zsign
+# 3. zsign（链 OpenSSL）
 # ============================================
 echo "📦 编译 zsign..."
 cd "$BUILD"
@@ -69,7 +73,10 @@ for f in *.cpp *.cc *.c; do
     [ ! -f "$f" ] && continue
     [[ "$f" == "main."* ]] && continue
     echo "  $f"
-    $CXX -c "$f" -o "${f%.*}.o" -I"$OUT/include" -I. -std=c++17 -O2 || echo "  跳过"
+    $CXX -c "$f" -o "${f%.*}.o" \
+        -I"$OUT/include" \
+        -I. \
+        -std=c++17 -O2 || echo "  跳过"
 done
 
 $AR rcs "$OUT/lib/libzsign.a" *.o 2>/dev/null
@@ -96,7 +103,6 @@ int zsign_sign(const char *app_path, const char *cert_path, const char *password
 EOF
 
 cat > "$BUILD/SignWrapper.c" << 'EOF'
-#include <stdlib.h>
 int ldid_sign(const char *a, const char *e) { return 0; }
 int zsign_sign(const char *a, const char *c, const char *p, const char *e) { return 0; }
 EOF
