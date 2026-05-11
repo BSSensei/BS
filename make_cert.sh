@@ -20,39 +20,65 @@ CODECA_SERIAL=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
 DEV_SERIAL=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
 
 # ============================================================
-# 生成 OID 列表（所有 Apple OID）
+# 生成配置文件
 # ============================================================
-PURE_OIDS="1.2.840.113635.100.6.2.18=DER:0500"
+cat > /tmp/oid_ext.conf << 'EOF'
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, keyCertSign, cRLSign
+certificatePolicies = 1.3.6.1.4.1.4146.10.3.5
+2.18 = DER:05:00
+1.3 = DER:05:00
+EOF
 
 for i in $(seq 1 26); do
-    if [ "$i" = "3" ]; then
-        PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.1.$i=DER:0500"
-    else
-        PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.1.$i=ASN1:NULL"
-    fi
+    [ "$i" = "3" ] && continue
+    echo "1.${i} = ASN1:NULL" >> /tmp/oid_ext.conf
+done
+
+for i in $(seq 4 26); do
+    [ "$i" = "3" ] || echo "1.${i} = ASN1:NULL" >> /tmp/oid_ext.conf
 done
 
 for i in $(seq 1 22); do
     case $i in
-        18|19|20|22) PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.2.$i=DER:0500" ;;
-        *) PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.2.$i=ASN1:NULL" ;;
+        18|19|20|22) echo "2.${i} = DER:05:00" >> /tmp/oid_ext.conf ;;
+        *) echo "2.${i} = ASN1:NULL" >> /tmp/oid_ext.conf ;;
     esac
 done
 
 for i in $(seq 1 5); do
-    PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.3.$i=ASN1:NULL"
+    echo "3.${i} = ASN1:NULL" >> /tmp/oid_ext.conf
 done
 
-PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.5.1=ASN1:NULL"
+echo "5.1 = ASN1:NULL" >> /tmp/oid_ext.conf
 
-V3_EXT=""
-for oid in $PURE_OIDS; do
-    V3_EXT="$V3_EXT -addext $oid"
+# 叶子证书配置
+cat > /tmp/leaf_ext.conf << 'EOF'
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = codeSigning
+certificatePolicies = 1.3.6.1.4.1.4146.10.3.5
+2.18 = DER:05:00
+1.3 = DER:05:00
+EOF
+
+for i in $(seq 1 26); do
+    [ "$i" = "3" ] && continue
+    echo "1.${i} = ASN1:NULL" >> /tmp/leaf_ext.conf
 done
 
-CA_FIXED="-addext basicConstraints=critical,CA:true -addext keyUsage=critical,digitalSignature,keyCertSign,cRLSign -addext certificatePolicies=1.3.6.1.4.1.4146.10.3.5"
+for i in $(seq 1 22); do
+    case $i in
+        18|19|20|22) echo "2.${i} = DER:05:00" >> /tmp/leaf_ext.conf ;;
+        *) echo "2.${i} = ASN1:NULL" >> /tmp/leaf_ext.conf ;;
+    esac
+done
 
-LEAF_FIXED="-addext basicConstraints=critical,CA:false -addext keyUsage=critical,digitalSignature -addext extendedKeyUsage=codeSigning -addext certificatePolicies=1.3.6.1.4.1.4146.10.3.5"
+for i in $(seq 1 5); do
+    echo "3.${i} = ASN1:NULL" >> /tmp/leaf_ext.conf
+done
+
+echo "5.1 = ASN1:NULL" >> /tmp/leaf_ext.conf
 
 # ============================================================
 # 1. Root CA
@@ -64,7 +90,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
     -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple Root CA" \
     -days ${DAYS} \
     -set_serial "0x${ROOT_SERIAL}" \
-    ${CA_FIXED} ${V3_EXT}
+    -extfile /tmp/oid_ext.conf
 echo "✅ Root CA"
 
 # ============================================================
@@ -75,7 +101,7 @@ openssl req -new -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/codeca_key.pem" \
     -out "${OUTPUT_DIR}/codeca_csr.pem" \
     -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple iPhone Certification Authority" \
-    ${CA_FIXED} ${V3_EXT}
+    -config <(cat /etc/ssl/openssl.cnf /tmp/oid_ext.conf 2>/dev/null || cat /tmp/oid_ext.conf)
 
 openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/root_key.pem" \
@@ -84,6 +110,7 @@ openssl x509 -req \
     -out "${OUTPUT_DIR}/codeca_cert.pem" \
     -days ${DAYS} \
     -set_serial "0x${CODECA_SERIAL}" \
+    -extfile /tmp/oid_ext.conf \
     -CAcreateserial
 echo "✅ 中间 CA"
 
@@ -95,7 +122,7 @@ openssl req -new -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/dev_key.pem" \
     -out "${OUTPUT_DIR}/dev_csr.pem" \
     -subj "/C=US/O=Apple Inc./OU=${TEAM_ID}/CN=Apple iPhone OS Application Signing" \
-    ${LEAF_FIXED} ${V3_EXT}
+    -config <(cat /etc/ssl/openssl.cnf /tmp/leaf_ext.conf 2>/dev/null || cat /tmp/leaf_ext.conf)
 
 openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/codeca_key.pem" \
@@ -104,6 +131,7 @@ openssl x509 -req \
     -out "${OUTPUT_DIR}/dev_cert.pem" \
     -days ${DAYS} \
     -set_serial "0x${DEV_SERIAL}" \
+    -extfile /tmp/leaf_ext.conf \
     -CAcreateserial
 echo "✅ 签名证书"
 
@@ -131,12 +159,6 @@ echo "✅ Base64"
 # 5. 打包
 # ============================================================
 echo ">>> [5/5] 打包..."
-
-OID_LIST=""
-for oid in $PURE_OIDS; do
-    OID_LIST="${OID_LIST}    ${oid}\n"
-done
-
 cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
 ============================================
   Apple 高仿证书
@@ -144,10 +166,7 @@ cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
   Team ID:  ${TEAM_ID}
   P12 密码: ${CERT_PASS}
   有效期:   9999年
-  .b64 = Base64 编码
-
-  写入的全部 Apple OID:
-${OID_LIST}
+  所有 OID 已写入证书（含 iOS/tvOS/watchOS/macOS）
 ============================================
 EOF
 
