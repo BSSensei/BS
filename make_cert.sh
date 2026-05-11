@@ -19,8 +19,9 @@ ROOT_SERIAL=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
 CODECA_SERIAL=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
 DEV_SERIAL=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
 
-FULL_OIDS="1.2.840.113635.100.6.2.18=DER:0500"
-FULL_OIDS="$FULL_OIDS certificatePolicies=1.3.6.1.4.1.4146.10.3.5"
+# 通用 OID（不含 basicConstraints/keyUsage/extendedKeyUsage/certificatePolicies）
+FULL_OIDS=""
+FULL_OIDS="$FULL_OIDS 1.2.840.113635.100.6.2.18=DER:0500"
 FULL_OIDS="$FULL_OIDS 1.2.840.113635.100.6.1.1=ASN1:NULL"
 FULL_OIDS="$FULL_OIDS 1.2.840.113635.100.6.1.2=ASN1:NULL"
 FULL_OIDS="$FULL_OIDS 1.2.840.113635.100.6.1.3=DER:0500"
@@ -80,6 +81,17 @@ for oid in $FULL_OIDS; do
     OID_ARGS="$OID_ARGS -addext $oid"
 done
 
+# CA 专用参数
+CA_EXTS="-addext basicConstraints=critical,CA:true"
+CA_EXTS="$CA_EXTS -addext keyUsage=critical,digitalSignature,keyCertSign,cRLSign"
+CA_EXTS="$CA_EXTS -addext certificatePolicies=1.3.6.1.4.1.4146.10.3.5"
+
+# 叶子专用参数
+LEAF_EXTS="-addext basicConstraints=critical,CA:false"
+LEAF_EXTS="$LEAF_EXTS -addext keyUsage=critical,digitalSignature"
+LEAF_EXTS="$LEAF_EXTS -addext extendedKeyUsage=codeSigning"
+LEAF_EXTS="$LEAF_EXTS -addext certificatePolicies=1.3.6.1.4.1.4146.10.3.5"
+
 # ============================================================
 # 1. Root CA
 # ============================================================
@@ -90,9 +102,7 @@ openssl req -newkey rsa:2048 -nodes \
     -set_serial "0x${ROOT_SERIAL}" \
     -out "${OUTPUT_DIR}/root_cert.pem" \
     -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple Root CA" \
-    -addext basicConstraints=critical,CA:true \
-    -addext keyUsage=critical,digitalSignature,keyCertSign,cRLSign \
-    ${OID_ARGS}
+    ${CA_EXTS} ${OID_ARGS}
 echo "✅ Root CA"
 
 # ============================================================
@@ -103,9 +113,7 @@ openssl req -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/codeca_key.pem" \
     -out "${OUTPUT_DIR}/codeca_csr.pem" \
     -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple iPhone Certification Authority" \
-    -addext basicConstraints=critical,CA:true \
-    -addext keyUsage=critical,digitalSignature,keyCertSign,cRLSign \
-    ${OID_ARGS}
+    ${CA_EXTS} ${OID_ARGS}
 
 openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/root_key.pem" \
@@ -125,10 +133,7 @@ openssl req -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/dev_key.pem" \
     -out "${OUTPUT_DIR}/dev_csr.pem" \
     -subj "/C=US/O=Apple Inc./OU=${TEAM_ID}/CN=Apple iPhone OS Application Signing" \
-    -addext basicConstraints=critical,CA:false \
-    -addext keyUsage=critical,digitalSignature \
-    -addext extendedKeyUsage=codeSigning \
-    ${OID_ARGS}
+    ${LEAF_EXTS} ${OID_ARGS}
 
 openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/codeca_key.pem" \
@@ -154,10 +159,8 @@ openssl pkcs12 -export \
     -out "${OUTPUT_DIR}/certificate.p12" \
     -name "Apple iPhone OS Application Signing"
 
-# P12 → Base64
 openssl base64 -in "${OUTPUT_DIR}/certificate.p12" -out "${OUTPUT_DIR}/certificate.p12.b64"
 
-# PEM → Base64
 for f in "${OUTPUT_DIR}"/*.pem; do
     openssl base64 -in "$f" -out "${f}.b64"
 done
@@ -175,7 +178,6 @@ cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
   Team ID:  ${TEAM_ID}
   P12 密码: ${CERT_PASS}
   有效期:   9999年
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   所有 .b64 文件是对应的 Base64 编码
 ============================================
 EOF
