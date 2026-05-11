@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>PeranmentStore</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>IPA File</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.apple.itunes.ipa</string>
+				<string>public.data</string>
+				<string>public.content</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleExecutable</key>
+	<string>PeranmentStore</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.PeranmentStore</string>
+	<key>CFBundleName</key>
+	<string>PeranmentStore</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.apple.PeranmentStore</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>PeranmentStore</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>MinimumOSVersion</key>
+	<string>14.0</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>For importing IPA files</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>For browsing and importing files</string>
+	<key>NSFileProviderDomainUsageDescription</key>
+	<string>For accessing files</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>For saving signed IPA files</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>For importing IPA files</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleDefault</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportsDocumentBrowser</key>
+	<true/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+</dict>
+</plist>
