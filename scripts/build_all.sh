@@ -10,6 +10,15 @@ set -e
 IOS_MIN="12.0"
 ARCH="arm64"
 SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+
+# 验证 SYSROOT
+if [ ! -d "$SYSROOT" ]; then
+    echo "❌ 错误：找不到 iPhone SDK，请确保 Xcode 已安装"
+    echo "   尝试运行: xcrun --sdk iphoneos --show-sdk-path"
+    exit 1
+fi
+echo "✅ SDK 路径: $SYSROOT"
+
 CC="xcrun -sdk iphoneos clang -arch ${ARCH} -mios-version-min=${IOS_MIN} -isysroot ${SYSROOT}"
 CXX="xcrun -sdk iphoneos clang++ -arch ${ARCH} -mios-version-min=${IOS_MIN} -isysroot ${SYSROOT}"
 AR="xcrun -sdk iphoneos ar"
@@ -31,16 +40,18 @@ build_openssl() {
     cd "$BUILD_DIR"
     
     if [ ! -d openssl ]; then
-        git clone --depth 1 --branch openssl-3.0.12 https://github.com/openssl/openssl.git
+        git clone --depth 1 --branch openssl-3.4.1 https://github.com/openssl/openssl.git
     fi
     cd openssl
     
-    ./Configure ios64-cross no-shared no-dso no-hw no-engine no-tests no-asm \
+    # 关键：显式指定 SDK 路径
+    ./Configure ios64-cross no-shared no-dso no-tests no-asm \
         --prefix="$OUTPUT_DIR" \
+        --sysroot="$SYSROOT" \
         -mios-version-min=$IOS_MIN
     
-    make -j$(sysctl -n hw.logicalcpu) build_sw 2>/dev/null
-    make install_sw 2>/dev/null
+    make -j$(sysctl -n hw.logicalcpu) build_sw 2>&1 | tail -5
+    make install_sw 2>&1 | tail -3
     
     echo "✅ OpenSSL 编译完成"
 }
@@ -53,7 +64,7 @@ build_libplist() {
     cd "$BUILD_DIR"
     
     if [ ! -d libplist ]; then
-        git clone --depth 1 --branch 2.3.0 https://github.com/libimobiledevice/libplist.git
+        git clone --depth 1 --branch 2.6.0 https://github.com/libimobiledevice/libplist.git
     fi
     cd libplist
     
@@ -70,10 +81,12 @@ build_libplist() {
         -DBUILD_SHARED_LIBS=OFF \
         -DWITHOUT_CYTHON=ON \
         -DENABLE_PYTHON=OFF \
-        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_FLAGS="-isysroot $SYSROOT" \
+        -DCMAKE_CXX_FLAGS="-isysroot $SYSROOT"
     
-    make -j$(sysctl -n hw.logicalcpu) 2>/dev/null
-    make install 2>/dev/null
+    make -j$(sysctl -n hw.logicalcpu) 2>&1 | tail -3
+    make install 2>&1 | tail -3
     
     echo "✅ libplist 编译完成"
 }
@@ -105,10 +118,11 @@ build_ldid() {
         $CXX -c "$src" -o "$obj" \
             -I"$OUTPUT_DIR/include" \
             -I. \
+            -isysroot "$SYSROOT" \
             -std=c++17 \
             -O2 \
             -D__LP64__ \
-            2>/dev/null || true
+            2>/dev/null || echo "    ⚠️ $src 编译失败，跳过"
         if [ -f "$obj" ]; then
             OBJS="$OBJS $obj"
         fi
@@ -120,7 +134,6 @@ build_ldid() {
         echo "✅ ldid 编译完成 ($(echo $OBJS | wc -w) 个对象文件)"
     else
         echo "⚠️ ldid 编译失败，创建空壳库"
-        # 创建一个最小的替代实现
         cat > ldid_stub.c << 'EOF'
 #include <stdio.h>
 int ldid_main(int argc, char **argv) {
@@ -128,7 +141,7 @@ int ldid_main(int argc, char **argv) {
     return -1;
 }
 EOF
-        $CC -c ldid_stub.c -o ldid_stub.o
+        $CC -c ldid_stub.c -o ldid_stub.o -isysroot "$SYSROOT"
         $AR rcs "$OUTPUT_DIR/lib/libldid.a" ldid_stub.o
     fi
     
@@ -160,10 +173,11 @@ build_zsign() {
         $CXX -c "$src" -o "$obj" \
             -I"$OUTPUT_DIR/include" \
             -I. \
+            -isysroot "$SYSROOT" \
             -std=c++17 \
             -O2 \
             -D__LP64__ \
-            2>/dev/null || true
+            2>/dev/null || echo "    ⚠️ $src 编译失败，跳过"
         if [ -f "$obj" ]; then
             OBJS="$OBJS $obj"
         fi
@@ -182,7 +196,7 @@ int zsign_main(int argc, char **argv) {
     return -1;
 }
 EOF
-        $CC -c zsign_stub.c -o zsign_stub.o
+        $CC -c zsign_stub.c -o zsign_stub.o -isysroot "$SYSROOT"
         $AR rcs "$OUTPUT_DIR/lib/libzsign.a" zsign_stub.o
     fi
     
@@ -193,7 +207,7 @@ EOF
 }
 
 # ============================================
-# 5. 创建桥接封装层（可选，因为使用 RootHelper 调用命令）
+# 5. 创建桥接封装层
 # ============================================
 create_wrapper() {
     echo "📝 创建 C 桥接封装..."
@@ -217,10 +231,6 @@ int ldid2_sign_real(const char *binaryPath, const char *certPath, const char *pa
 int zsign_sign_adhoc(const char *binaryPath, const char *entitlementsPath);
 int zsign_sign_real(const char *binaryPath, const char *certPath, const char *password, const char *provPath, const char *entitlementsPath);
 
-// 工具函数
-bool is_trollstore_environment(void);
-bool has_root_privileges(void);
-
 #ifdef __cplusplus
 }
 #endif
@@ -234,9 +244,7 @@ HEADER
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <unistd.h>
 
-// 构造并执行命令
 static int run_command(const char *cmd) {
     return system(cmd);
 }
@@ -244,7 +252,6 @@ static int run_command(const char *cmd) {
 int ldid2_sign_adhoc(const char *binaryPath, const char *entitlementsPath, const char *teamID) {
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "ldid2");
-    
     if (entitlementsPath && entitlementsPath[0]) {
         snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " -S%s", entitlementsPath);
     }
@@ -252,19 +259,16 @@ int ldid2_sign_adhoc(const char *binaryPath, const char *entitlementsPath, const
         snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " -K%s", teamID);
     }
     snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " %s", binaryPath);
-    
     return run_command(cmd);
 }
 
 int ldid2_sign_real(const char *binaryPath, const char *certPath, const char *password, const char *entitlementsPath) {
     char cmd[4096];
     snprintf(cmd, sizeof(cmd), "ldid2");
-    
     if (entitlementsPath && entitlementsPath[0]) {
         snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " -S%s", entitlementsPath);
     }
     snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " -C%s -p%s %s", certPath, password ? password : "", binaryPath);
-    
     return run_command(cmd);
 }
 
@@ -290,20 +294,13 @@ int zsign_sign_real(const char *binaryPath, const char *certPath, const char *pa
     snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), " %s", binaryPath);
     return run_command(cmd);
 }
-
-bool is_trollstore_environment(void) {
-    return access("/var/mobile/Library/Preferences", W_OK) == 0;
-}
-
-bool has_root_privileges(void) {
-    return getuid() == 0;
-}
 IMPL
 
     # 编译封装库
     $CC -c "$OUTPUT_DIR/include/SignWrapper.c" \
         -o "$OUTPUT_DIR/lib/SignWrapper.o" \
         -I"$OUTPUT_DIR/include" \
+        -isysroot "$SYSROOT" \
         -O2
     
     $AR rcs "$OUTPUT_DIR/lib/libSignWrapper.a" "$OUTPUT_DIR/lib/SignWrapper.o"
