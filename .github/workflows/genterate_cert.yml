@@ -1,7 +1,8 @@
 name: 生成签名证书
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   generate:
@@ -15,10 +16,6 @@ jobs:
         run: |
           chmod +x make_cert.sh
           ./make_cert.sh
-          
-          # 显示生成的文件
-          echo "====== 生成的证书文件 ======"
-          find cert_output -type f 2>/dev/null || echo "未找到 cert_output 目录"
 
       - name: 上传证书
         uses: actions/upload-artifact@v4
