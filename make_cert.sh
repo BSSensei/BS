@@ -20,11 +20,10 @@ CODECA_SERIAL=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
 DEV_SERIAL=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
 
 # ============================================================
-# 生成完整 OID 列表
+# 生成 OID 列表（所有 Apple OID）
 # ============================================================
 PURE_OIDS="1.2.840.113635.100.6.2.18=DER:0500"
 
-# 6.1.1 - 6.1.26（代码签名全平台）
 for i in $(seq 1 26); do
     if [ "$i" = "3" ]; then
         PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.1.$i=DER:0500"
@@ -33,7 +32,6 @@ for i in $(seq 1 26); do
     fi
 done
 
-# 6.2.1 - 6.2.22（Apple 服务 + 特殊标记）
 for i in $(seq 1 22); do
     case $i in
         18|19|20|22) PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.2.$i=DER:0500" ;;
@@ -41,12 +39,10 @@ for i in $(seq 1 22); do
     esac
 done
 
-# 6.3.1 - 6.3.5（系统安全）
 for i in $(seq 1 5); do
     PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.3.$i=ASN1:NULL"
 done
 
-# 6.5.1（Push）
 PURE_OIDS="$PURE_OIDS 1.2.840.113635.100.6.5.1=ASN1:NULL"
 
 V3_EXT=""
@@ -135,6 +131,12 @@ echo "✅ Base64"
 # 5. 打包
 # ============================================================
 echo ">>> [5/5] 打包..."
+
+OID_LIST=""
+for oid in $PURE_OIDS; do
+    OID_LIST="${OID_LIST}    ${oid}\n"
+done
+
 cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
 ============================================
   Apple 高仿证书
@@ -143,7 +145,9 @@ cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
   P12 密码: ${CERT_PASS}
   有效期:   9999年
   .b64 = Base64 编码
-  OID 总数: 57（6.1.1-26 + 6.2.1-22 + 6.3.1-5 + 6.5.1 + 6.2.18）
+
+  写入的全部 Apple OID:
+${OID_LIST}
 ============================================
 EOF
 
