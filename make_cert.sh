@@ -8,6 +8,8 @@ CERT_PASS="${3:-1}"
 TEAM_ID=$(echo "$TEAM_ID" | xargs)
 mkdir -p "$OUTPUT_DIR"
 
+PROJECT_DIR="$(pwd)"
+
 echo "============================================"
 echo "  Apple 高仿证书生成器"
 echo "  Team ID:  $TEAM_ID"
@@ -90,7 +92,7 @@ openssl req -newkey rsa:2048 -nodes \
     -subj "/C=US/O=Apple Inc./CN=Apple Root CA" \
     ${CA_OIDS}
 
-echo "✅ Root CA → root_key.pem + root_cert.pem"
+echo "✅ Root CA 完成"
 
 # ============================================================
 # 2. 中间 CA
@@ -103,35 +105,6 @@ openssl req -newkey rsa:2048 -nodes \
     -subj "/C=US/O=Apple Inc./CN=Apple iPhone Certification Authority" \
     ${CA_OIDS}
 
-openssl ca -selfsign -notext \
-    -keyfile "${OUTPUT_DIR}/root_key.pem" \
-    -cert "${OUTPUT_DIR}/root_cert.pem" \
-    -in "${OUTPUT_DIR}/codeca_csr.pem" \
-    -out "${OUTPUT_DIR}/codeca_cert.pem" \
-    -days ${DAYS} \
-    -batch \
-    -extensions v3_ca \
-    -config <(echo "
-        [ ca ]
-        default_ca = CA_default
-        [ CA_default ]
-        database = /tmp/openssl-index.txt
-        serial = /tmp/openssl-serial
-        new_certs_dir = /tmp
-        default_md = sha256
-        policy = policy_anything
-        [ policy_anything ]
-        countryName = optional
-        stateOrProvinceName = optional
-        localityName = optional
-        organizationName = optional
-        organizationalUnitName = optional
-        commonName = optional
-        emailAddress = optional
-        [ v3_ca ]
-        basicConstraints = critical,CA:true
-        keyUsage = critical,keyCertSign,cRLSign
-    ") 2>/dev/null || \
 openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/root_key.pem" \
     -CA "${OUTPUT_DIR}/root_cert.pem" \
@@ -140,10 +113,10 @@ openssl x509 -req \
     -out "${OUTPUT_DIR}/codeca_cert.pem" \
     -CAcreateserial
 
-echo "✅ 中间 CA → codeca_key.pem + codeca_cert.pem"
+echo "✅ 中间 CA 完成"
 
 # ============================================================
-# 3. 签名证书（叶子）
+# 3. 签名证书
 # ============================================================
 echo ">>> [3/6] 生成签名证书..."
 
@@ -161,7 +134,7 @@ openssl x509 -req \
     -out "${OUTPUT_DIR}/dev_cert.pem" \
     -CAcreateserial
 
-echo "✅ 签名证书 → dev_key.pem + dev_cert.pem"
+echo "✅ 签名证书完成"
 
 # ============================================================
 # 4. 导出 P12
@@ -178,12 +151,12 @@ openssl pkcs12 -export \
     -out "${OUTPUT_DIR}/certificate.p12" \
     -name "Apple iPhone OS Application Signing"
 
-echo "✅ P12 → certificate.p12"
+echo "✅ P12 完成"
 
 # ============================================================
-# 5. 生成证书信息
+# 5. 生成信息 + 打包 zip（不清理文件）
 # ============================================================
-echo ">>> [5/6] 生成证书信息..."
+echo ">>> [5/6] 打包证书..."
 
 cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
 ============================================
@@ -192,47 +165,28 @@ cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
   生成时间:   $(date)
   Team ID:    ${TEAM_ID}
   P12 密码:   ${CERT_PASS}
-  有效期至:   2126年（${DAYS}天）
-
-  证书链:
-    root_cert.pem           - Apple Root CA
-    codeca_cert.pem         - Apple iPhone Certification Authority
-    dev_cert.pem            - Apple iPhone OS Application Signing
-
-  私钥:
-    root_key.pem            - Root CA 私钥
-    codeca_key.pem          - 中间 CA 私钥
-    dev_key.pem             - 签名证书私钥
-
-  签名请求:
-    codeca_csr.pem          - 中间 CA CSR
-    dev_csr.pem             - 签名证书 CSR
-
-  导出:
-    certificate.p12         - P12 格式（含完整证书链）
-
+  有效期至:   2126年
   包含全部 Apple OID（iOS/tvOS/watchOS/macOS）
 ============================================
 EOF
 
+# 打包成 zip
+cd "${OUTPUT_DIR}"
+zip -qr "${PROJECT_DIR}/certificates.zip" .
+cd "${PROJECT_DIR}"
+
+echo "    ✅ 证书已打包 → certificates.zip"
+
 echo ""
 echo "============================================"
-echo "  ✅ 全部证书生成完成！"
+echo "  ✅ 全部完成！"
 echo ""
-echo "  📁 输出目录: ${OUTPUT_DIR}/"
-echo "  📦  P12:     certificate.p12"
+echo "  📁 证书 zip: ${PROJECT_DIR}/certificates.zip"
+echo "  📦  P12:     certificate.p12（在 zip 内）"
 echo "  🔑  密码:    ${CERT_PASS}"
 echo "  📅  有效期:  2126年"
 echo ""
-echo "  保留的文件:"
-echo "    root_cert.pem    - Apple Root CA 证书"
-echo "    root_key.pem     - Apple Root CA 私钥"
-echo "    codeca_cert.pem  - 中间 CA 证书"
-echo "    codeca_key.pem   - 中间 CA 私钥"
-echo "    codeca_csr.pem   - 中间 CA 签名请求"
-echo "    dev_cert.pem     - 代码签名证书"
-echo "    dev_key.pem      - 代码签名私钥"
-echo "    dev_csr.pem      - 代码签名请求"
-echo "    chain.pem        - 完整证书链"
-echo "    certificate.p12  - P12 导出"
+echo "  📥 下载方式:"
+echo "     GitHub Actions → Artifacts → Certificates"
+echo "     或在本地: ${PROJECT_DIR}/certificates.zip"
 echo "============================================"
