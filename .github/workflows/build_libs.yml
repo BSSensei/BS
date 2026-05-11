@@ -1,0 +1,30 @@
+name: 编译 ldid 和 zsign 静态库
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.3'
+
+      - name: 安装依赖
+        run: |
+          brew install cmake make git
+
+      - name: 编译所有静态库
+        run: bash scripts/build_all.sh
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-static-libs
+          path: Frameworks/
