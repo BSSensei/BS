@@ -76,7 +76,6 @@ LEAF_OIDS="$LEAF_OIDS -addext 1.2.840.113635.100.6.2.1=ASN1:NULL"
 LEAF_OIDS="$LEAF_OIDS -addext 1.2.840.113635.100.6.2.6=ASN1:NULL"
 LEAF_OIDS="$LEAF_OIDS -addext 1.2.840.113635.100.6.5.1=ASN1:NULL"
 
-# 有效期天数（2126年 ≈ 36500天）
 DAYS=36500
 
 # ============================================================
@@ -110,7 +109,8 @@ openssl x509 -req \
     -days ${DAYS} \
     -in "${OUTPUT_DIR}/codeca_csr.pem" \
     -out "${OUTPUT_DIR}/codeca_cert.pem" \
-    -CAcreateserial -copy_extensions=copy
+    -CAcreateserial \
+    -copy_extensions=copy
 
 echo "✅ 中间 CA → codeca_key.pem + codeca_cert.pem"
 
@@ -131,7 +131,8 @@ openssl x509 -req \
     -days ${DAYS} \
     -in "${OUTPUT_DIR}/dev_csr.pem" \
     -out "${OUTPUT_DIR}/dev_cert.pem" \
-    -CAcreateserial -copy_extensions=copy
+    -CAcreateserial \
+    -copy_extensions=copy
 
 echo "✅ 签名证书 → dev_key.pem + dev_cert.pem"
 
