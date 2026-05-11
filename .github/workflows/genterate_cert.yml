@@ -4,6 +4,9 @@ on:
   push:
     branches: [ main ]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   generate:
     runs-on: macos-latest
@@ -16,6 +19,14 @@ jobs:
         run: |
           chmod +x make_cert.sh
           ./make_cert.sh
+          
+          echo "====== 检查 cert_output 目录 ======"
+          if [ -d cert_output ]; then
+            ls -la cert_output/
+            echo "文件数: $(find cert_output -type f | wc -l)"
+          else
+            echo "❌ cert_output 目录不存在！make_cert.sh 可能执行失败"
+          fi
 
       - name: 上传证书
         uses: actions/upload-artifact@v4
