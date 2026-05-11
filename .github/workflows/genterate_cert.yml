@@ -1,0 +1,29 @@
+name: 编译并生成证书
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 生成签名证书
+        run: |
+          chmod +x make_cert.sh
+          ./make_cert.sh
+
+      - name: 上传证书文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: cert-files
+          path: |
+            *.p12
+            *.mobileprovision
+            *.pem
+            *.crt
+            *.key
