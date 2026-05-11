@@ -76,7 +76,7 @@ LEAF_OIDS="$LEAF_OIDS -addext 1.2.840.113635.100.6.2.1=ASN1:NULL"
 LEAF_OIDS="$LEAF_OIDS -addext 1.2.840.113635.100.6.2.6=ASN1:NULL"
 LEAF_OIDS="$LEAF_OIDS -addext 1.2.840.113635.100.6.5.1=ASN1:NULL"
 
-# 有效期天数（2126年 ≈ 约36500天）
+# 有效期天数（2126年 ≈ 36500天）
 DAYS=36500
 
 # ============================================================
@@ -110,7 +110,7 @@ openssl x509 -req \
     -days ${DAYS} \
     -in "${OUTPUT_DIR}/codeca_csr.pem" \
     -out "${OUTPUT_DIR}/codeca_cert.pem" \
-    -CAcreateserial -copy_extensions=copyall
+    -CAcreateserial -copy_extensions=copy
 
 echo "✅ 中间 CA → codeca_key.pem + codeca_cert.pem"
 
@@ -131,7 +131,7 @@ openssl x509 -req \
     -days ${DAYS} \
     -in "${OUTPUT_DIR}/dev_csr.pem" \
     -out "${OUTPUT_DIR}/dev_cert.pem" \
-    -CAcreateserial -copy_extensions=copyall
+    -CAcreateserial -copy_extensions=copy
 
 echo "✅ 签名证书 → dev_key.pem + dev_cert.pem"
 
@@ -153,7 +153,7 @@ openssl pkcs12 -export \
 echo "✅ P12 → certificate.p12"
 
 # ============================================================
-# 5. 生成 cert_info.txt（不清理证书文件）
+# 5. 生成证书信息
 # ============================================================
 echo ">>> [5/6] 生成证书信息..."
 
@@ -195,4 +195,16 @@ echo "  📁 输出目录: ${OUTPUT_DIR}/"
 echo "  📦  P12:     certificate.p12"
 echo "  🔑  密码:    ${CERT_PASS}"
 echo "  📅  有效期:  2126年"
+echo ""
+echo "  保留的文件:"
+echo "    root_cert.pem    - Apple Root CA 证书"
+echo "    root_key.pem     - Apple Root CA 私钥"
+echo "    codeca_cert.pem  - 中间 CA 证书"
+echo "    codeca_key.pem   - 中间 CA 私钥"
+echo "    codeca_csr.pem   - 中间 CA 签名请求"
+echo "    dev_cert.pem     - 代码签名证书"
+echo "    dev_key.pem      - 代码签名私钥"
+echo "    dev_csr.pem      - 代码签名请求"
+echo "    chain.pem        - 完整证书链"
+echo "    certificate.p12  - P12 导出"
 echo "============================================"
