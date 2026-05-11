@@ -103,14 +103,42 @@ openssl req -newkey rsa:2048 -nodes \
     -subj "/C=US/O=Apple Inc./CN=Apple iPhone Certification Authority" \
     ${CA_OIDS}
 
+openssl ca -selfsign -notext \
+    -keyfile "${OUTPUT_DIR}/root_key.pem" \
+    -cert "${OUTPUT_DIR}/root_cert.pem" \
+    -in "${OUTPUT_DIR}/codeca_csr.pem" \
+    -out "${OUTPUT_DIR}/codeca_cert.pem" \
+    -days ${DAYS} \
+    -batch \
+    -extensions v3_ca \
+    -config <(echo "
+        [ ca ]
+        default_ca = CA_default
+        [ CA_default ]
+        database = /tmp/openssl-index.txt
+        serial = /tmp/openssl-serial
+        new_certs_dir = /tmp
+        default_md = sha256
+        policy = policy_anything
+        [ policy_anything ]
+        countryName = optional
+        stateOrProvinceName = optional
+        localityName = optional
+        organizationName = optional
+        organizationalUnitName = optional
+        commonName = optional
+        emailAddress = optional
+        [ v3_ca ]
+        basicConstraints = critical,CA:true
+        keyUsage = critical,keyCertSign,cRLSign
+    ") 2>/dev/null || \
 openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/root_key.pem" \
     -CA "${OUTPUT_DIR}/root_cert.pem" \
     -days ${DAYS} \
     -in "${OUTPUT_DIR}/codeca_csr.pem" \
     -out "${OUTPUT_DIR}/codeca_cert.pem" \
-    -CAcreateserial \
-    -copy_extensions=copy
+    -CAcreateserial
 
 echo "✅ 中间 CA → codeca_key.pem + codeca_cert.pem"
 
@@ -131,8 +159,7 @@ openssl x509 -req \
     -days ${DAYS} \
     -in "${OUTPUT_DIR}/dev_csr.pem" \
     -out "${OUTPUT_DIR}/dev_cert.pem" \
-    -CAcreateserial \
-    -copy_extensions=copy
+    -CAcreateserial
 
 echo "✅ 签名证书 → dev_key.pem + dev_cert.pem"
 
