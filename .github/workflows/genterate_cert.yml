@@ -15,21 +15,23 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 生成证书
+      - name: 生成证书并检查
         run: |
           chmod +x make_cert.sh
           ./make_cert.sh
           
-          echo "====== 检查 cert_output 目录 ======"
-          if [ -d cert_output ]; then
-            ls -la cert_output/
-            echo "文件数: $(find cert_output -type f | wc -l)"
+          echo "====== 检查生成的文件 ======"
+          if [ -f certificates.zip ]; then
+            echo "✅ certificates.zip 已生成"
+            ls -lh certificates.zip
           else
-            echo "❌ cert_output 目录不存在！make_cert.sh 可能执行失败"
+            echo "❌ certificates.zip 未找到！"
+            exit 1
           fi
 
       - name: 上传证书
         uses: actions/upload-artifact@v4
         with:
           name: cert-files
-          path: cert_output/
+          path: certificates.zip
+          retention-days: 90
