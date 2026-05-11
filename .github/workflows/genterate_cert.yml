@@ -1,29 +1,27 @@
-name: 编译并生成证书
+name: 生成签名证书
 
 on:
-  push:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  generate:
     runs-on: macos-latest
     
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 生成签名证书
+      - name: 生成证书
         run: |
           chmod +x make_cert.sh
           ./make_cert.sh
+          
+          # 显示生成的文件
+          echo "====== 生成的证书文件 ======"
+          find cert_output -type f 2>/dev/null || echo "未找到 cert_output 目录"
 
-      - name: 上传证书文件
+      - name: 上传证书
         uses: actions/upload-artifact@v4
         with:
           name: cert-files
-          path: |
-            *.p12
-            *.mobileprovision
-            *.pem
-            *.crt
-            *.key
+          path: cert_output/
