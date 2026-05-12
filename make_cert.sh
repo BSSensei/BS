@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 TEAM_ID="${1:-0000000000}"
 OUTPUT_DIR="${2:-./cert_output}"
@@ -9,7 +8,6 @@ TEAM_ID=$(echo "$TEAM_ID" | xargs)
 mkdir -p "$OUTPUT_DIR"
 PROJECT_DIR="$(pwd)"
 
-# 使用 Homebrew 安装的 OpenSSL 3
 OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
 export PATH="$(brew --prefix openssl@3)/bin:$PATH"
 
@@ -23,8 +21,8 @@ ROOT_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 CODECA_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 DEV_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 
-# 生成 CA 的 OID 扩展配置文件
-cat > /tmp/ca_oid.conf << EOF
+# 生成 CA 配置文件
+cat > /tmp/ca_oid.conf << 'EOF'
 [ req ]
 distinguished_name = req_distinguished_name
 req_extensions = v3_ca
@@ -36,4 +34,159 @@ O = Apple Inc.
 OU = Apple Certification Authority
 CN = Apple Root CA
 
-[ v3_c
+[ v3_ca ]
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, keyCertSign, cRLSign
+certificatePolicies = 1.3.6.1.4.1.4146.10.3.5
+1.2.840.113635.100.6.2.18 = DER:05:00
+1.2.840.113635.100.6.1.3 = DER:05:00
+EOF
+
+for i in $(seq 1 26); do
+    [ "$i" = "3" ] && continue
+    echo "1.2.840.113635.100.6.1.${i} = ASN1:NULL" >> /tmp/ca_oid.conf
+done
+
+for i in $(seq 1 22); do
+    case $i in
+        18|19|20|22) echo "1.2.840.113635.100.6.2.${i} = DER:05:00" >> /tmp/ca_oid.conf ;;
+        *) echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/ca_oid.conf ;;
+    esac
+done
+
+for i in $(seq 1 5); do
+    echo "1.2.840.113635.100.6.3.${i} = ASN1:NULL" >> /tmp/ca_oid.conf
+done
+
+echo "1.2.840.113635.100.6.5.1 = ASN1:NULL" >> /tmp/ca_oid.conf
+
+# 叶子证书配置
+cat > /tmp/leaf_oid.conf << EOF
+[ req ]
+distinguished_name = req_distinguished_name
+req_extensions = v3_leaf
+prompt = no
+
+[ req_distinguished_name ]
+C = US
+O = Apple Inc.
+OU = ${TEAM_ID}
+CN = Apple iPhone OS Application Signing
+
+[ v3_leaf ]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = codeSigning
+certificatePolicies = 1.3.6.1.4.1.4146.10.3.5
+1.2.840.113635.100.6.2.18 = DER:05:00
+1.2.840.113635.100.6.1.3 = DER:05:00
+EOF
+
+for i in $(seq 1 26); do
+    [ "$i" = "3" ] && continue
+    echo "1.2.840.113635.100.6.1.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf
+done
+
+for i in $(seq 1 22); do
+    case $i in
+        18|19|20|22) echo "1.2.840.113635.100.6.2.${i} = DER:05:00" >> /tmp/leaf_oid.conf ;;
+        *) echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf ;;
+    esac
+done
+
+for i in $(seq 1 5); do
+    echo "1.2.840.113635.100.6.3.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf
+done
+
+echo "1.2.840.113635.100.6.5.1 = ASN1:NULL" >> /tmp/leaf_oid.conf
+
+# 签发用配置
+cp /tmp/ca_oid.conf /tmp/ca_issuer.conf
+cp /tmp/leaf_oid.conf /tmp/leaf_issuer.conf
+
+echo ">>> [1/5] Root CA..."
+$OPENSSL req -x509 -newkey rsa:2048 -nodes \
+    -keyout "${OUTPUT_DIR}/root_key.pem" \
+    -out "${OUTPUT_DIR}/root_cert.pem" \
+    -config /tmp/ca_oid.conf \
+    -days ${DAYS} \
+    -set_serial "0x${ROOT_SERIAL}" \
+    -extensions v3_ca || { echo "❌ Root CA 失败"; exit 1; }
+echo "✅ Root CA"
+
+echo ">>> [2/5] 中间 CA..."
+$OPENSSL req -new -newkey rsa:2048 -nodes \
+    -keyout "${OUTPUT_DIR}/codeca_key.pem" \
+    -out "${OUTPUT_DIR}/codeca_csr.pem" \
+    -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple iPhone Certification Authority" \
+    -reqexts v3_ca \
+    -config /tmp/ca_oid.conf || { echo "❌ 中间 CA CSR 失败"; exit 1; }
+
+$OPENSSL x509 -req \
+    -CAkey "${OUTPUT_DIR}/root_key.pem" \
+    -CA "${OUTPUT_DIR}/root_cert.pem" \
+    -in "${OUTPUT_DIR}/codeca_csr.pem" \
+    -out "${OUTPUT_DIR}/codeca_cert.pem" \
+    -days ${DAYS} \
+    -set_serial "0x${CODECA_SERIAL}" \
+    -extfile /tmp/ca_issuer.conf \
+    -extensions v3_ca \
+    -CAcreateserial || { echo "❌ 中间 CA 签发失败"; exit 1; }
+echo "✅ 中间 CA"
+
+echo ">>> [3/5] 签名证书..."
+$OPENSSL req -new -newkey rsa:2048 -nodes \
+    -keyout "${OUTPUT_DIR}/dev_key.pem" \
+    -out "${OUTPUT_DIR}/dev_csr.pem" \
+    -config /tmp/leaf_oid.conf || { echo "❌ 签名 CSR 失败"; exit 1; }
+
+$OPENSSL x509 -req \
+    -CAkey "${OUTPUT_DIR}/codeca_key.pem" \
+    -CA "${OUTPUT_DIR}/codeca_cert.pem" \
+    -in "${OUTPUT_DIR}/dev_csr.pem" \
+    -out "${OUTPUT_DIR}/dev_cert.pem" \
+    -days ${DAYS} \
+    -set_serial "0x${DEV_SERIAL}" \
+    -extfile /tmp/leaf_issuer.conf \
+    -extensions v3_leaf \
+    -CAcreateserial || { echo "❌ 签名证书签发失败"; exit 1; }
+echo "✅ 签名证书"
+
+echo ">>> [4/5] P12 + Base64..."
+cat "${OUTPUT_DIR}/codeca_cert.pem" "${OUTPUT_DIR}/root_cert.pem" > "${OUTPUT_DIR}/chain.pem" || true
+
+$OPENSSL pkcs12 -export \
+    -in "${OUTPUT_DIR}/dev_cert.pem" \
+    -inkey "${OUTPUT_DIR}/dev_key.pem" \
+    -certfile "${OUTPUT_DIR}/chain.pem" \
+    -passout "pass:${CERT_PASS}" \
+    -out "${OUTPUT_DIR}/certificate.p12" \
+    -name "Apple iPhone OS Application Signing" || { echo "❌ P12 导出失败"; exit 1; }
+
+$OPENSSL base64 -in "${OUTPUT_DIR}/certificate.p12" -out "${OUTPUT_DIR}/certificate.p12.b64" || true
+for f in "${OUTPUT_DIR}"/*.pem; do
+    $OPENSSL base64 -in "$f" -out "${f}.b64" 2>/dev/null || true
+done
+echo "✅ Base64"
+
+echo ">>> [5/5] 打包..."
+cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
+============================================
+  Apple 高仿证书
+============================================
+  Team ID:  ${TEAM_ID}
+  P12 密码: ${CERT_PASS}
+  有效期:   9999年
+  所有 Apple OID 已写入证书
+============================================
+EOF
+
+cd "${OUTPUT_DIR}"
+zip -qr "${PROJECT_DIR}/certificates.zip" . || { echo "❌ 打包失败"; exit 1; }
+cd "${PROJECT_DIR}"
+
+echo "============================================"
+echo "  ✅ 完成"
+echo "  📥 ${PROJECT_DIR}/certificates.zip"
+echo "  🔑 密码: ${CERT_PASS}"
+echo "============================================"
