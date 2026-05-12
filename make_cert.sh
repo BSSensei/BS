@@ -22,7 +22,7 @@ CODECA_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 DEV_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 
 # ============================================================
-# CA 配置文件（使用正确的 Apple 证书策略 OID）
+# 1. 生成 CA 配置文件（先写固定内容，再用 for 追加 OID）
 # ============================================================
 cat > /tmp/ca_oid.conf << 'EOF'
 [ req ]
@@ -40,10 +40,12 @@ CN = Apple Root CA
 basicConstraints = critical, CA:true
 keyUsage = critical, digitalSignature, keyCertSign, cRLSign
 certificatePolicies = 1.2.840.113635.100.5.1
+1.2.840.113635.100.6.2.18 = DER:05:00
+EOF
+
 # 6.1.1 - 6.1.26（全部 DER:0500）
 for i in $(seq 1 26); do
-
-  echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/ca_oid.conf
+    echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/ca_oid.conf
 done
 
 # 6.2.1 - 6.2.17（ASN1:NULL）
@@ -59,7 +61,7 @@ done
 echo "1.2.840.113635.100.6.5.1 = ASN1:NULL" >> /tmp/ca_oid.conf
 
 # ============================================================
-# 叶子证书配置文件
+# 2. 生成 Leaf 配置文件
 # ============================================================
 cat > /tmp/leaf_oid.conf << 'EOF'
 [ req ]
@@ -78,7 +80,6 @@ basicConstraints = critical, CA:false
 keyUsage = critical, digitalSignature
 extendedKeyUsage = codeSigning
 certificatePolicies = 1.2.840.113635.100.5.1
-CPS = https://www.apple.com/certificateauthority/
 1.2.840.113635.100.6.2.18 = DER:05:00
 EOF
 
@@ -101,8 +102,9 @@ cp /tmp/ca_oid.conf /tmp/ca_issuer.conf
 cp /tmp/leaf_oid.conf /tmp/leaf_issuer.conf
 
 # ============================================================
-# 1. Root CA
+# 3. 生成证书
 # ============================================================
+
 echo ">>> [1/5] Root CA..."
 $OPENSSL req -x509 -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/root_key.pem" \
@@ -113,9 +115,6 @@ $OPENSSL req -x509 -newkey rsa:2048 -nodes \
     -extensions v3_ca || { echo "❌ Root CA 失败"; exit 1; }
 echo "✅ Root CA"
 
-# ============================================================
-# 2. 中间 CA
-# ============================================================
 echo ">>> [2/5] 中间 CA..."
 $OPENSSL req -new -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/codeca_key.pem" \
@@ -136,9 +135,6 @@ $OPENSSL x509 -req \
     -CAcreateserial || { echo "❌ 中间 CA 签发失败"; exit 1; }
 echo "✅ 中间 CA"
 
-# ============================================================
-# 3. 签名证书
-# ============================================================
 echo ">>> [3/5] 签名证书..."
 $OPENSSL req -new -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/dev_key.pem" \
@@ -185,15 +181,10 @@ cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
 ============================================
   Apple 高仿证书
 ============================================
-  Team ID:  ${TEAM_ID}
   P12 密码: ${CERT_PASS}
   有效期:   ~8000年
   证书策略: 1.2.840.113635.100.5.1
-  CPS:      https://www.apple.com/certificateauthority/
-  6.1.1-6.1.26 = DER:0500
-  6.2.1-6.2.18 = ASN1:NULL (6.2.18=DER:0500)
-  6.3.1-6.3.5  = ASN1:NULL
-  6.5.1        = ASN1:NULL (Push)
+  全部 OID 已写入证书
 ============================================
 EOF
 
