@@ -72,12 +72,18 @@ cd "$BUILD"
 git clone --depth 1 https://github.com/openssl/openssl.git
 cd openssl
 
+# ✅ 直接在 Configure 时指定正确的 sysroot
 ./Configure ios64-cross no-shared no-dso no-asm no-tests no-apps \
     --prefix="$BUILD/openssl_install" \
+    --sysroot="$SYSROOT" \
     -mios-version-min=$IOS_MIN
 
-# 修复 sysroot 路径
+# ✅ 修复 Makefile 中可能残留的错误 sysroot 路径
 find . -name "Makefile" -exec sed -i '' "s|-isysroot /SDKs/|-isysroot $SYSROOT|g" {} \;
+
+# 验证 sysroot 路径是否修复成功
+echo "🔍 验证 sysroot 路径:"
+grep "isysroot" Makefile | head -3
 
 # 只编译库
 make -j$(sysctl -n hw.logicalcpu) libcrypto.a libssl.a
