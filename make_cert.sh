@@ -40,13 +40,10 @@ CN = Apple Root CA
 basicConstraints = critical, CA:true
 keyUsage = critical, digitalSignature, keyCertSign, cRLSign
 certificatePolicies = 1.2.840.113635.100.5.1
-CPS = https://www.apple.com/certificateauthority/
-1.2.840.113635.100.6.2.18 = DER:05:00
-EOF
-
 # 6.1.1 - 6.1.26（全部 DER:0500）
 for i in $(seq 1 26); do
-    echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/ca_oid.conf
+
+  echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/ca_oid.conf
 done
 
 # 6.2.1 - 6.2.17（ASN1:NULL）
