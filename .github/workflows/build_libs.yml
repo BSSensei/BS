@@ -1,4 +1,4 @@
-name: 编译 ldid 和 zsign 静态库
+name: 库
 
 on:
   push:
@@ -27,3 +27,9 @@ jobs:
         with:
           name: ios-static-libs
           path: Frameworks/
+
+      - name: 上传编译日志
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build_log.txt.gz
