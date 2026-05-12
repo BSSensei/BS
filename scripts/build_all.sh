@@ -33,15 +33,12 @@ create_framework() {
     local fw_dir="$FRAMEWORKS/$name.framework"
     mkdir -p "$fw_dir/Headers"
     
-    # 复制二进制
     cp "$lib_path" "$fw_dir/$name"
     
-    # 复制头文件
     if [ -d "$headers_dir" ]; then
         cp -r "$headers_dir"/* "$fw_dir/Headers/" 2>/dev/null || true
     fi
     
-    # 创建 Info.plist
     cat > "$fw_dir/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -78,22 +75,31 @@ cd openssl
     -mios-version-min=$IOS_MIN
 
 # ============ 核心修复 ============
-CROSS_TOP="$(dirname "$(dirname "$SYSROOT")")"   # .../Platforms/iPhoneOS.platform/Developer
-CROSS_SDK="$(basename "$SYSROOT")"                # iPhoneOS18.5.sdk
+# 问题根源：configdata.pm 里 CROSS_TOP 和 CROSS_SDK 为空
+# Makefile 从 configdata.pm 生成，所以改 configdata.pm 最彻底
+CROSS_TOP="$(dirname "$(dirname "$SYSROOT")")"
+CROSS_SDK="$(basename "$SYSROOT")"
 
-echo "🔧 修复 Makefile..."
+echo "🔧 修复 configdata.pm..."
 echo "   CROSS_TOP=$CROSS_TOP"
 echo "   CROSS_SDK=$CROSS_SDK"
 
-# 修复 Makefile 和所有子目录的 Makefile
-find . -name "Makefile" -exec sed -i '' \
-    -e "s|^CROSS_TOP=.*|CROSS_TOP=$CROSS_TOP|" \
-    -e "s|^CROSS_SDK=.*|CROSS_SDK=$CROSS_SDK|" {} \;
+# 修复 configdata.pm（Makefile 的源头）
+sed -i '' \
+    -e "s|'CROSS_TOP',.*|'CROSS_TOP', '$CROSS_TOP',|" \
+    -e "s|'CROSS_SDK',.*|'CROSS_SDK', '$CROSS_SDK',|" \
+    configdata.pm
 
-# 暴力兜底：直接替换所有残留的错误路径
+# 重新生成 Makefile
+perl configdata.pm
+
+# 暴力兜底：直接替换所有 Makefile 里的 /SDKs/
 find . -name "Makefile" -exec sed -i '' \
     -e "s|-isysroot \"/SDKs/\"|-isysroot \"$SYSROOT\"|g" \
     -e "s|-isysroot /SDKs/|-isysroot $SYSROOT|g" {} \;
+
+echo "🔍 验证修复..."
+grep -r "isysroot" Makefile | head -3
 
 # 编译
 make -j$(sysctl -n hw.logicalcpu) libcrypto.a libssl.a
@@ -156,7 +162,6 @@ echo "✅ zsign 完成"
 echo "📦 创建 OpenSSL Framework..."
 cd "$BUILD/openssl"
 
-# 合并 libcrypto 和 libssl
 $LIPO -create libcrypto.a libssl.a -output libopenssl.a
 
 create_framework "OpenSSL" "$(pwd)/libopenssl.a" "$(pwd)/include"
