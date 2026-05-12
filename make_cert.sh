@@ -15,7 +15,7 @@ echo "============================================"
 echo "  Apple 高仿证书生成器"
 echo "============================================"
 
-DAYS=2921940
+DAYS=1145140
 
 ROOT_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 CODECA_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
