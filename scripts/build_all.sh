@@ -75,8 +75,6 @@ cd openssl
     -mios-version-min=$IOS_MIN
 
 # ============ 核心修复 ============
-# OpenSSL 4.1.0 在某些地方硬编码了 /SDKs/
-# 最稳妥的办法：直接 export 环境变量，让 Make 忽略内部路径
 export CROSS_TOP="$(dirname "$(dirname "$SYSROOT")")"
 export CROSS_SDK="$(basename "$SYSROOT")"
 export CFLAGS="-isysroot $SYSROOT -mios-version-min=$IOS_MIN -arch $ARCH"
@@ -85,9 +83,11 @@ export CXXFLAGS="$CFLAGS"
 echo "🔧 环境变量:"
 echo "   CROSS_TOP=$CROSS_TOP"
 echo "   CROSS_SDK=$CROSS_SDK"
-echo "   CFLAGS=$CFLAGS"
 
-# 编译（make 会优先使用环境变量里的 CFLAGS，内部硬编码就失效了）
+# 先生成缺失的头文件（opensslv.h 等）
+make -j$(sysctl -n hw.logicalcpu) build_generated
+
+# 编译库
 make -j$(sysctl -n hw.logicalcpu) libcrypto.a libssl.a
 
 echo "✅ OpenSSL 编译完成"
