@@ -1,199 +1,146 @@
 #!/bin/bash
+set -e
 
 TEAM_ID="${1:-Apple Certification Authority}"
 OUTPUT_DIR="${2:-./cert_output}"
-CERT_PASS="${3:-1}"
+CERT_PASS="${3:-}"
 
 TEAM_ID=$(echo "$TEAM_ID" | xargs)
 mkdir -p "$OUTPUT_DIR"
-PROJECT_DIR="$(pwd)"
 
-OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
-export PATH="$(brew --prefix openssl@3)/bin:$PATH"
+export PATH="/opt/homebrew/opt/openssl@3/bin:$PATH"
 
 echo "============================================"
 echo "  Apple 高仿证书生成器"
 echo "============================================"
 
-DAYS=2912000
-
-ROOT_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
-CODECA_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
-DEV_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
-
 # ============================================================
-# 1. 生成 CA 配置文件（先写固定内容，再用 for 追加 OID）
+# 1. Root CA
 # ============================================================
-cat > /tmp/ca_oid.conf << 'EOF'
-[ req ]
-distinguished_name = req_distinguished_name
-req_extensions = v3_ca
-prompt = no
-
-[ req_distinguished_name ]
-C = US
-O = Apple Inc.
-OU = Apple Certification Authority
-CN = Apple Root CA
-
-[ v3_ca ]
-basicConstraints = critical, CA:true
-keyUsage = critical, digitalSignature, keyCertSign, cRLSign
-certificatePolicies = 1.2.840.113635.100.5.1
-1.2.840.113635.100.6.2.18 = DER:05:00
-EOF
-
-# 6.1.1 - 6.1.26（全部 DER:0500）
-for i in $(seq 1 26); do
-    echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/ca_oid.conf
-done
-
-# 6.2.1 - 6.2.17（ASN1:NULL）
-for i in $(seq 1 17); do
-    echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/ca_oid.conf
-done
-
-# 6.3.1 - 6.3.5
-for i in $(seq 1 5); do
-    echo "1.2.840.113635.100.6.3.${i} = ASN1:NULL" >> /tmp/ca_oid.conf
-done
-
-echo "1.2.840.113635.100.6.5.1 = ASN1:NULL" >> /tmp/ca_oid.conf
-
-# ============================================================
-# 2. 生成 Leaf 配置文件
-# ============================================================
-cat > /tmp/leaf_oid.conf << 'EOF'
-[ req ]
-distinguished_name = req_distinguished_name
-req_extensions = v3_leaf
-prompt = no
-
-[ req_distinguished_name ]
-C = US
-O = Apple Inc.
-OU = Apple Certification Authority
-CN = Apple Development
-
-[ v3_leaf ]
-basicConstraints = critical, CA:false
-keyUsage = critical, digitalSignature
-extendedKeyUsage = codeSigning
-certificatePolicies = 1.2.840.113635.100.5.1
-1.2.840.113635.100.6.2.18 = DER:05:00
-EOF
-
-for i in $(seq 1 26); do
-    echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/leaf_oid.conf
-done
-
-for i in $(seq 1 17); do
-    echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf
-done
-
-for i in $(seq 1 5); do
-    echo "1.2.840.113635.100.6.3.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf
-done
-
-echo "1.2.840.113635.100.6.5.1 = ASN1:NULL" >> /tmp/leaf_oid.conf
-
-# 签发用配置
-cp /tmp/ca_oid.conf /tmp/ca_issuer.conf
-cp /tmp/leaf_oid.conf /tmp/leaf_issuer.conf
-
-# ============================================================
-# 3. 生成证书
-# ============================================================
-
-echo ">>> [1/5] Root CA..."
-$OPENSSL req -x509 -newkey rsa:2048 -nodes \
+echo ">>> [1/3] Root CA..."
+openssl req -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/root_key.pem" \
+    -x509 -days 2912000 \
     -out "${OUTPUT_DIR}/root_cert.pem" \
-    -config /tmp/ca_oid.conf \
-    -days ${DAYS} \
-    -set_serial "0x${ROOT_SERIAL}" \
-    -extensions v3_ca || { echo "❌ Root CA 失败"; exit 1; }
+    -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple Root CA" \
+    -addext "1.2.840.113635.100.6.2.18=DER:0500" \
+    -addext "basicConstraints=critical,CA:true" \
+    -addext "keyUsage=critical,digitalSignature,keyCertSign,cRLSign"
 echo "✅ Root CA"
 
-echo ">>> [2/5] 中间 CA..."
-$OPENSSL req -new -newkey rsa:2048 -nodes \
+# ============================================================
+# 2. 中间 CA
+# ============================================================
+echo ">>> [2/3] 中间 CA..."
+openssl req -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/codeca_key.pem" \
     -out "${OUTPUT_DIR}/codeca_csr.pem" \
     -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple iPhone Certification Authority" \
-    -reqexts v3_ca \
-    -config /tmp/ca_oid.conf || { echo "❌ 中间 CA CSR 失败"; exit 1; }
+    -addext "1.2.840.113635.100.6.2.18=DER:0500" \
+    -addext "basicConstraints=critical,CA:true" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
 
-$OPENSSL x509 -req \
+openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/root_key.pem" \
     -CA "${OUTPUT_DIR}/root_cert.pem" \
+    -days 2912000 \
     -in "${OUTPUT_DIR}/codeca_csr.pem" \
     -out "${OUTPUT_DIR}/codeca_cert.pem" \
-    -days ${DAYS} \
-    -set_serial "0x${CODECA_SERIAL}" \
-    -extfile /tmp/ca_issuer.conf \
-    -extensions v3_ca \
-    -CAcreateserial || { echo "❌ 中间 CA 签发失败"; exit 1; }
+    -CAcreateserial
 echo "✅ 中间 CA"
 
-echo ">>> [3/5] 签名证书..."
-$OPENSSL req -new -newkey rsa:2048 -nodes \
+# ============================================================
+# 3. 签名证书
+# ============================================================
+echo ">>> [3/3] 签名证书..."
+openssl req -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/dev_key.pem" \
     -out "${OUTPUT_DIR}/dev_csr.pem" \
-    -config /tmp/leaf_oid.conf || { echo "❌ 签名 CSR 失败"; exit 1; }
+    -subj "/C=US/O=Apple Inc./OU=${TEAM_ID}/CN=Apple Development" \
+    -addext "basicConstraints=critical,CA:false" \
+    -addext "keyUsage=critical,digitalSignature" \
+    -addext "extendedKeyUsage=codeSigning" \
+    -addext "1.2.840.113635.100.6.1.3=DER:0500"
 
-$OPENSSL x509 -req \
+openssl x509 -req \
     -CAkey "${OUTPUT_DIR}/codeca_key.pem" \
     -CA "${OUTPUT_DIR}/codeca_cert.pem" \
+    -days 2912000 \
     -in "${OUTPUT_DIR}/dev_csr.pem" \
     -out "${OUTPUT_DIR}/dev_cert.pem" \
-    -days ${DAYS} \
-    -set_serial "0x${DEV_SERIAL}" \
-    -extfile /tmp/leaf_issuer.conf \
-    -extensions v3_leaf \
-    -CAcreateserial || { echo "❌ 签名证书签发失败"; exit 1; }
+    -CAcreateserial
 echo "✅ 签名证书"
 
 # ============================================================
-# 4. P12 + Base64
+# 4. 导出 P12 + Base64
 # ============================================================
-echo ">>> [4/5] P12 + Base64..."
-cat "${OUTPUT_DIR}/codeca_cert.pem" "${OUTPUT_DIR}/root_cert.pem" > "${OUTPUT_DIR}/chain.pem" || true
+echo ">>> 导出 P12..."
+cat "${OUTPUT_DIR}/codeca_cert.pem" "${OUTPUT_DIR}/root_cert.pem" > "${OUTPUT_DIR}/chain.pem"
 
-$OPENSSL pkcs12 -export \
+openssl pkcs12 -export \
     -in "${OUTPUT_DIR}/dev_cert.pem" \
     -inkey "${OUTPUT_DIR}/dev_key.pem" \
     -certfile "${OUTPUT_DIR}/chain.pem" \
+    -keypbe NONE -certpbe NONE \
     -passout "pass:${CERT_PASS}" \
     -out "${OUTPUT_DIR}/certificate.p12" \
-    -name "Apple Development" || { echo "❌ P12 导出失败"; exit 1; }
+    -name "Apple Development"
 
-$OPENSSL base64 -in "${OUTPUT_DIR}/certificate.p12" -out "${OUTPUT_DIR}/certificate.p12.b64" || true
+openssl base64 -in "${OUTPUT_DIR}/certificate.p12" -out "${OUTPUT_DIR}/certificate.p12.b64"
 for f in "${OUTPUT_DIR}"/*.pem; do
-    $OPENSSL base64 -in "$f" -out "${f}.b64" 2>/dev/null || true
+    openssl base64 -in "$f" -out "${f}.b64"
 done
-echo "✅ Base64"
+echo "✅ P12 + Base64"
 
 # ============================================================
-# 5. 打包
+# 5. 生成完整证书链 TXT
 # ============================================================
-echo ">>> [5/5] 打包..."
+echo ">>> 生成证书链 TXT..."
+
+{
+    echo "============================================"
+    echo "  完整证书链"
+    echo "============================================"
+    echo ""
+    echo "=== Apple Root CA ==="
+    openssl x509 -in "${OUTPUT_DIR}/root_cert.pem" -text -noout
+    echo ""
+    echo "=== Apple iPhone Certification Authority ==="
+    openssl x509 -in "${OUTPUT_DIR}/codeca_cert.pem" -text -noout
+    echo ""
+    echo "=== Apple Development (签名证书) ==="
+    openssl x509 -in "${OUTPUT_DIR}/dev_cert.pem" -text -noout
+} > "${OUTPUT_DIR}/certificate_chain.txt"
+
+echo "✅ 证书链 TXT"
+
+# ============================================================
+# 6. 打包
+# ============================================================
+echo ">>> 打包..."
 cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
 ============================================
   Apple 高仿证书
 ============================================
-  P12 密码: ${CERT_PASS}
+  Team ID:  ${TEAM_ID}
+  密码:     ${CERT_PASS}
   有效期:   ~8000年
-  证书策略: 1.2.840.113635.100.5.1
-  全部 OID 已写入证书
+
+  文件列表:
+    root_cert.pem        - Apple Root CA
+    codeca_cert.pem      - Apple iPhone Certification Authority
+    dev_cert.pem         - Apple Development (签名证书)
+    certificate.p12      - P12 格式（含完整证书链）
+    certificate_chain.txt- 完整证书链（含各层级详细信息）
+    *.b64                - 所有文件的 Base64 编码
 ============================================
 EOF
 
 cd "${OUTPUT_DIR}"
-zip -qr "${PROJECT_DIR}/certificates.zip" . || { echo "❌ 打包失败"; exit 1; }
-cd "${PROJECT_DIR}"
+zip -qr "../certificates.zip" .
+cd ..
 
 echo "============================================"
-echo "  ✅ 完成"
-echo "  📥 ${PROJECT_DIR}/certificates.zip"
+echo "  ✅ 完成 → certificates.zip"
 echo "  🔑 密码: ${CERT_PASS}"
 echo "============================================"
