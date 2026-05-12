@@ -6,17 +6,14 @@ set -e
 #  日志文件: build_log.txt
 # ============================================
 
-# 日志文件路径
 LOG_FILE="$(pwd)/build_log.txt"
 
-# 清空旧日志，记录开始时间
 echo "============================================================" | tee "$LOG_FILE"
 echo "  PermanentStore 编译日志" | tee -a "$LOG_FILE"
 echo "  开始时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
 echo "============================================================" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
-# 把整个脚本的输出同时写到终端和日志文件
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 IOS_MIN="12.0"
@@ -24,7 +21,6 @@ ARCH="arm64"
 SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
 echo "✅ SDK: $SYSROOT"
 
-# 编译工具链
 CC="xcrun -sdk iphoneos clang -arch ${ARCH} -mios-version-min=${IOS_MIN} -isysroot ${SYSROOT}"
 CXX="xcrun -sdk iphoneos clang++ -arch ${ARCH} -mios-version-min=${IOS_MIN} -isysroot ${SYSROOT}"
 AR="xcrun -sdk iphoneos ar"
@@ -122,14 +118,12 @@ cd "$BUILD"
 git clone --depth 1 https://github.com/libimobiledevice/libplist.git
 cd libplist
 
-# 生成 configure
 if [ -f "autogen.sh" ]; then
     ./autogen.sh 2>/dev/null || true
 elif [ -f "configure.ac" ] || [ -f "configure.in" ]; then
     autoreconf -i 2>/dev/null || true
 fi
 
-# 如果有 configure 就用 configure，否则手动编译
 if [ -f "configure" ]; then
     echo "🔧 Configure..."
     ./configure \
@@ -243,6 +237,24 @@ echo "✅ OpenSSL Framework 完成"
 echo ""
 
 # ============================================
+# 打包产物
+# ============================================
+echo "============================================================"
+echo "📦 打包产物"
+echo "============================================================"
+
+# 打包 Frameworks
+cd "$(dirname "$FRAMEWORKS")"
+tar -czf Frameworks.tar.gz Frameworks/
+echo "✅ Frameworks.tar.gz 已创建"
+
+# 压缩日志
+gzip -f "$LOG_FILE"
+echo "✅ ${LOG_FILE}.gz 已创建"
+
+echo ""
+
+# ============================================
 # 结果
 # ============================================
 echo "============================================================"
@@ -252,13 +264,32 @@ echo ""
 find "$FRAMEWORKS" -name "*.framework" -maxdepth 1 -exec echo "📦 {}" \;
 echo ""
 
+echo "📥 产物文件:"
+echo "   $(pwd)/Frameworks.tar.gz"
+echo "   ${LOG_FILE}.gz"
+echo ""
+
 echo "============================================================"
-echo "  结束时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
-echo "  日志文件: $LOG_FILE"
+echo "  结束时间: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 
-# 如果有压缩工具，打包日志
-if command -v gzip &> /dev/null; then
-    gzip -f "$LOG_FILE"
-    echo "📥 日志已压缩: ${LOG_FILE}.gz"
+# ============================================
+# GitHub Actions 上传说明
+# ============================================
+if [ -n "$GITHUB_ACTIONS" ]; then
+    echo ""
+    echo "📤 GitHub Actions 环境检测到"
+    echo "   请在 workflow 中添加以下步骤来上传产物:"
+    echo ""
+    echo "   - name: 上传 Frameworks"
+    echo "     uses: actions/upload-artifact@v4"
+    echo "     with:"
+    echo "       name: Frameworks"
+    echo "       path: Frameworks.tar.gz"
+    echo ""
+    echo "   - name: 上传日志"
+    echo "     uses: actions/upload-artifact@v4"
+    echo "     with:"
+    echo "       name: Build-Log"
+    echo "       path: build_log.txt.gz"
 fi
