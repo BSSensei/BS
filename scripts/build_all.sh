@@ -69,31 +69,76 @@ cd "$BUILD"
 git clone --depth 1 https://github.com/openssl/openssl.git
 cd openssl
 
-# 配置
 ./Configure ios64-cross no-shared no-dso no-asm no-tests no-apps \
     --prefix="$BUILD/openssl_install" \
     -mios-version-min=$IOS_MIN
 
-# ============ 核心修复 ============
 export CROSS_TOP="$(dirname "$(dirname "$SYSROOT")")"
 export CROSS_SDK="$(basename "$SYSROOT")"
 export CFLAGS="-isysroot $SYSROOT -mios-version-min=$IOS_MIN -arch $ARCH"
 export CXXFLAGS="$CFLAGS"
 
-echo "🔧 环境变量:"
+echo "🔧 OpenSSL 环境变量:"
 echo "   CROSS_TOP=$CROSS_TOP"
 echo "   CROSS_SDK=$CROSS_SDK"
 
-# 先生成缺失的头文件（opensslv.h 等）
 make -j$(sysctl -n hw.logicalcpu) build_generated
-
-# 编译库
 make -j$(sysctl -n hw.logicalcpu) libcrypto.a libssl.a
 
 echo "✅ OpenSSL 编译完成"
 
 # ============================================
-# 2. 编译 ldid
+# 2. 编译 libplist（ldid 依赖）
+# ============================================
+echo "📦 编译 libplist..."
+cd "$BUILD"
+git clone --depth 1 https://github.com/libimobiledevice/libplist.git
+cd libplist
+
+# 生成 configure
+if [ -f "autogen.sh" ]; then
+    ./autogen.sh 2>/dev/null || true
+elif [ -f "configure.ac" ] || [ -f "configure.in" ]; then
+    autoreconf -i 2>/dev/null || true
+fi
+
+# 如果有 configure 就用 configure，否则手动编译
+if [ -f "configure" ]; then
+    ./configure \
+        --host=arm64-apple-ios \
+        --prefix="$BUILD/libplist_install" \
+        --without-cython \
+        CC="$CC" \
+        CXX="$CXX" \
+        AR="$AR" \
+        RANLIB="$RANLIB"
+    make -j$(sysctl -n hw.logicalcpu)
+    make install
+    PLIST_INCLUDE="$BUILD/libplist_install/include"
+    PLIST_LIB="$BUILD/libplist_install/lib"
+else
+    # 手动编译静态库
+    mkdir -p "$BUILD/libplist_install/include/plist"
+    cp include/plist/*.h "$BUILD/libplist_install/include/plist/" 2>/dev/null || true
+    
+    OBJS=""
+    for f in src/*.c; do
+        [ ! -f "$f" ] && continue
+        echo "  $f"
+        $CC -c "$f" -o "${f%.*}.o" \
+            -Iinclude \
+            -DHAVE_CONFIG_H -O2 || continue
+        OBJS="$OBJS ${f%.*}.o"
+    done
+    
+    PLIST_INCLUDE="$BUILD/libplist_install/include"
+    PLIST_LIB="$(pwd)"
+fi
+
+echo "✅ libplist 编译完成"
+
+# ============================================
+# 3. 编译 ldid
 # ============================================
 echo "📦 编译 ldid..."
 cd "$BUILD"
@@ -108,6 +153,7 @@ for f in *.cpp *.cc; do
     $CXX -c "$f" -o "${f%.*}.o" \
         -I. \
         -I"$BUILD/openssl/include" \
+        -I"$PLIST_INCLUDE" \
         -std=c++17 -O2 && OBJS="$OBJS ${f%.*}.o"
 done
 
@@ -119,7 +165,7 @@ cp "$BUILD/openssl/include/openssl" "$FRAMEWORKS/ldid.framework/Headers/" -r 2>/
 echo "✅ ldid 完成"
 
 # ============================================
-# 3. 编译 zsign
+# 4. 编译 zsign
 # ============================================
 echo "📦 编译 zsign..."
 cd "$BUILD"
@@ -143,7 +189,7 @@ create_framework "zsign" "$(pwd)/libzsign.a" "$(pwd)"
 echo "✅ zsign 完成"
 
 # ============================================
-# 4. OpenSSL Framework（合并 libcrypto + libssl）
+# 5. OpenSSL Framework（合并 libcrypto + libssl）
 # ============================================
 echo "📦 创建 OpenSSL Framework..."
 cd "$BUILD/openssl"
