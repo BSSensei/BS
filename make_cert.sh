@@ -1,6 +1,6 @@
 #!/bin/bash
 
-TEAM_ID="${1:-0000000000}"
+TEAM_ID="${1:-Apple Certification Authority}"
 OUTPUT_DIR="${2:-./cert_output}"
 CERT_PASS="${3:-1}"
 
@@ -15,13 +15,15 @@ echo "============================================"
 echo "  Apple 高仿证书生成器"
 echo "============================================"
 
-DAYS=1145140
+DAYS=2912000
 
 ROOT_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 CODECA_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 DEV_SERIAL=$($OPENSSL rand -hex 8 | tr '[:lower:]' '[:upper:]')
 
-# 生成 CA 配置文件
+# ============================================================
+# CA 配置文件（使用正确的 Apple 证书策略 OID）
+# ============================================================
 cat > /tmp/ca_oid.conf << 'EOF'
 [ req ]
 distinguished_name = req_distinguished_name
@@ -37,31 +39,32 @@ CN = Apple Root CA
 [ v3_ca ]
 basicConstraints = critical, CA:true
 keyUsage = critical, digitalSignature, keyCertSign, cRLSign
-certificatePolicies = 1.3.6.1.4.1.4146.10.3.5
+certificatePolicies = 1.2.840.113635.100.5.1
+CPS = https://www.apple.com/certificateauthority/
 1.2.840.113635.100.6.2.18 = DER:05:00
-1.2.840.113635.100.6.1.3 = DER:05:00
 EOF
 
+# 6.1.1 - 6.1.26（全部 DER:0500）
 for i in $(seq 1 26); do
-    [ "$i" = "3" ] && continue
-    echo "1.2.840.113635.100.6.1.${i} = ASN1:NULL" >> /tmp/ca_oid.conf
+    echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/ca_oid.conf
 done
 
-for i in $(seq 1 22); do
-    case $i in
-        18|19|20|22) echo "1.2.840.113635.100.6.2.${i} = DER:05:00" >> /tmp/ca_oid.conf ;;
-        *) echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/ca_oid.conf ;;
-    esac
+# 6.2.1 - 6.2.17（ASN1:NULL）
+for i in $(seq 1 17); do
+    echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/ca_oid.conf
 done
 
+# 6.3.1 - 6.3.5
 for i in $(seq 1 5); do
     echo "1.2.840.113635.100.6.3.${i} = ASN1:NULL" >> /tmp/ca_oid.conf
 done
 
 echo "1.2.840.113635.100.6.5.1 = ASN1:NULL" >> /tmp/ca_oid.conf
 
-# 叶子证书配置
-cat > /tmp/leaf_oid.conf << EOF
+# ============================================================
+# 叶子证书配置文件
+# ============================================================
+cat > /tmp/leaf_oid.conf << 'EOF'
 [ req ]
 distinguished_name = req_distinguished_name
 req_extensions = v3_leaf
@@ -70,28 +73,24 @@ prompt = no
 [ req_distinguished_name ]
 C = US
 O = Apple Inc.
-OU = ${TEAM_ID}
-CN = Apple iPhone OS Application Signing
+OU = Apple Certification Authority
+CN = Apple Development
 
 [ v3_leaf ]
 basicConstraints = critical, CA:false
 keyUsage = critical, digitalSignature
 extendedKeyUsage = codeSigning
-certificatePolicies = 1.3.6.1.4.1.4146.10.3.5
+certificatePolicies = 1.2.840.113635.100.5.1
+CPS = https://www.apple.com/certificateauthority/
 1.2.840.113635.100.6.2.18 = DER:05:00
-1.2.840.113635.100.6.1.3 = DER:05:00
 EOF
 
 for i in $(seq 1 26); do
-    [ "$i" = "3" ] && continue
-    echo "1.2.840.113635.100.6.1.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf
+    echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/leaf_oid.conf
 done
 
-for i in $(seq 1 22); do
-    case $i in
-        18|19|20|22) echo "1.2.840.113635.100.6.2.${i} = DER:05:00" >> /tmp/leaf_oid.conf ;;
-        *) echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf ;;
-    esac
+for i in $(seq 1 17); do
+    echo "1.2.840.113635.100.6.2.${i} = ASN1:NULL" >> /tmp/leaf_oid.conf
 done
 
 for i in $(seq 1 5); do
@@ -104,6 +103,9 @@ echo "1.2.840.113635.100.6.5.1 = ASN1:NULL" >> /tmp/leaf_oid.conf
 cp /tmp/ca_oid.conf /tmp/ca_issuer.conf
 cp /tmp/leaf_oid.conf /tmp/leaf_issuer.conf
 
+# ============================================================
+# 1. Root CA
+# ============================================================
 echo ">>> [1/5] Root CA..."
 $OPENSSL req -x509 -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/root_key.pem" \
@@ -114,6 +116,9 @@ $OPENSSL req -x509 -newkey rsa:2048 -nodes \
     -extensions v3_ca || { echo "❌ Root CA 失败"; exit 1; }
 echo "✅ Root CA"
 
+# ============================================================
+# 2. 中间 CA
+# ============================================================
 echo ">>> [2/5] 中间 CA..."
 $OPENSSL req -new -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/codeca_key.pem" \
@@ -134,6 +139,9 @@ $OPENSSL x509 -req \
     -CAcreateserial || { echo "❌ 中间 CA 签发失败"; exit 1; }
 echo "✅ 中间 CA"
 
+# ============================================================
+# 3. 签名证书
+# ============================================================
 echo ">>> [3/5] 签名证书..."
 $OPENSSL req -new -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/dev_key.pem" \
@@ -152,6 +160,9 @@ $OPENSSL x509 -req \
     -CAcreateserial || { echo "❌ 签名证书签发失败"; exit 1; }
 echo "✅ 签名证书"
 
+# ============================================================
+# 4. P12 + Base64
+# ============================================================
 echo ">>> [4/5] P12 + Base64..."
 cat "${OUTPUT_DIR}/codeca_cert.pem" "${OUTPUT_DIR}/root_cert.pem" > "${OUTPUT_DIR}/chain.pem" || true
 
@@ -161,7 +172,7 @@ $OPENSSL pkcs12 -export \
     -certfile "${OUTPUT_DIR}/chain.pem" \
     -passout "pass:${CERT_PASS}" \
     -out "${OUTPUT_DIR}/certificate.p12" \
-    -name "Apple iPhone OS Application Signing" || { echo "❌ P12 导出失败"; exit 1; }
+    -name "Apple Development" || { echo "❌ P12 导出失败"; exit 1; }
 
 $OPENSSL base64 -in "${OUTPUT_DIR}/certificate.p12" -out "${OUTPUT_DIR}/certificate.p12.b64" || true
 for f in "${OUTPUT_DIR}"/*.pem; do
@@ -169,6 +180,9 @@ for f in "${OUTPUT_DIR}"/*.pem; do
 done
 echo "✅ Base64"
 
+# ============================================================
+# 5. 打包
+# ============================================================
 echo ">>> [5/5] 打包..."
 cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
 ============================================
@@ -176,8 +190,13 @@ cat > "${OUTPUT_DIR}/cert_info.txt" << EOF
 ============================================
   Team ID:  ${TEAM_ID}
   P12 密码: ${CERT_PASS}
-  有效期:   9999年
-  所有 Apple OID 已写入证书
+  有效期:   ~8000年
+  证书策略: 1.2.840.113635.100.5.1
+  CPS:      https://www.apple.com/certificateauthority/
+  6.1.1-6.1.26 = DER:0500
+  6.2.1-6.2.18 = ASN1:NULL (6.2.18=DER:0500)
+  6.3.1-6.3.5  = ASN1:NULL
+  6.5.1        = ASN1:NULL (Push)
 ============================================
 EOF
 
