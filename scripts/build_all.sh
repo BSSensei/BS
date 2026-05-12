@@ -72,32 +72,28 @@ cd "$BUILD"
 git clone --depth 1 https://github.com/openssl/openssl.git
 cd openssl
 
-# 配置（不传 --sysroot，改用 Makefile 变量修复）
+# 配置
 ./Configure ios64-cross no-shared no-dso no-asm no-tests no-apps \
     --prefix="$BUILD/openssl_install" \
     -mios-version-min=$IOS_MIN
 
 # ============ 核心修复 ============
-# OpenSSL 的 Makefile 用 CROSS_TOP 和 CROSS_SDK 拼出 sysroot 路径
-# 格式: $(CROSS_TOP)/SDKs/$(CROSS_SDK)
-# 这两个变量默认是空的，导致变成 /SDKs/
 CROSS_TOP="$(dirname "$(dirname "$SYSROOT")")"   # .../Platforms/iPhoneOS.platform/Developer
 CROSS_SDK="$(basename "$SYSROOT")"                # iPhoneOS18.5.sdk
 
-echo "🔧 修复 Makefile 变量:"
+echo "🔧 修复 Makefile..."
 echo "   CROSS_TOP=$CROSS_TOP"
 echo "   CROSS_SDK=$CROSS_SDK"
 
+# 修复 Makefile 和所有子目录的 Makefile
 find . -name "Makefile" -exec sed -i '' \
     -e "s|^CROSS_TOP=.*|CROSS_TOP=$CROSS_TOP|" \
     -e "s|^CROSS_SDK=.*|CROSS_SDK=$CROSS_SDK|" {} \;
 
-# 验证修复
-echo "🔍 验证 CROSS_TOP / CROSS_SDK:"
-grep "^CROSS_TOP=" Makefile
-grep "^CROSS_SDK=" Makefile
-echo "🔍 验证 isysroot 参数:"
-grep "isysroot" Makefile | head -3
+# 暴力兜底：直接替换所有残留的错误路径
+find . -name "Makefile" -exec sed -i '' \
+    -e "s|-isysroot \"/SDKs/\"|-isysroot \"$SYSROOT\"|g" \
+    -e "s|-isysroot /SDKs/|-isysroot $SYSROOT|g" {} \;
 
 # 编译
 make -j$(sysctl -n hw.logicalcpu) libcrypto.a libssl.a
