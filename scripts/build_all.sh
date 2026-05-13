@@ -12,22 +12,29 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_TEMP="$ROOT_DIR/build_temp"
 mkdir -p "$BUILD_TEMP"
 
-# SDK 路径
+# 获取 SDK 信息
 SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
 if [ -z "$SDK_PATH" ]; then
     echo -e "${RED}❌ 无法找到 iPhoneOS SDK${NC}"
     exit 1
 fi
+SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
 echo "✅ SDK: $SDK_PATH"
 
-# 清理旧目录
+# 设置交叉编译环境变量（OpenSSL 需要）
+export CROSS_TOP="$(xcrun --sdk iphoneos --show-sdk-platform-path)/Developer"
+export CROSS_SDK="iPhoneOS${SDK_VERSION}.sdk"
+export CC="xcrun -sdk iphoneos clang -arch arm64"
+export CXX="xcrun -sdk iphoneos clang++ -arch arm64"
+
+# 清理旧构建目录
 echo "🔧 清理旧构建目录..."
 rm -rf "$BUILD_TEMP/openssl" "$BUILD_TEMP/openssl_install"
 rm -rf "$BUILD_TEMP/libplist" "$BUILD_TEMP/libplist_install"
 rm -rf "$BUILD_TEMP/ldid" "$BUILD_TEMP/ldid_install"
 
 # ============================================================
-# 1. 编译 OpenSSL（保持不变，但输出路径明确）
+# 1. 编译 OpenSSL（修复 sysroot 问题）
 # ============================================================
 echo -e "\n============================================================"
 echo "📦 [1/4] 编译 OpenSSL"
@@ -35,7 +42,16 @@ echo "============================================================"
 cd "$BUILD_TEMP"
 git clone --depth 1 https://github.com/openssl/openssl.git
 cd openssl
-./Configure ios64-cross --prefix="$BUILD_TEMP/openssl_install" --openssldir="$BUILD_TEMP/openssl_install/ssl" no-shared no-tests
+
+# 配置：显式指定 isysroot 和架构
+./Configure ios64-cross \
+    --prefix="$BUILD_TEMP/openssl_install" \
+    --openssldir="$BUILD_TEMP/openssl_install/ssl" \
+    no-shared no-tests \
+    -isysroot "$SDK_PATH" \
+    -mios-version-min=12.0
+
+# 编译并安装
 make -j$(sysctl -n hw.ncpu)
 make install_sw
 cd ..
@@ -50,8 +66,9 @@ echo "============================================================"
 cd "$BUILD_TEMP"
 git clone --depth 1 https://github.com/libimobiledevice/libplist.git
 cd libplist
-# 修复：生成 config.h
-./autogen.sh --prefix="$BUILD_TEMP/libplist_install" --disable-shared --enable-static
+
+# 使用 autogen.sh 生成 config.h
+./autogen.sh --prefix="$BUILD_TEMP/libplist_install" --disable-shared --enable-static --host=arm64-apple-darwin
 make -j$(sysctl -n hw.ncpu)
 make install
 cd ..
@@ -67,7 +84,7 @@ cd "$BUILD_TEMP"
 git clone --depth 1 https://github.com/ProcursusTeam/ldid.git
 cd ldid
 
-# 应用补丁
+# 创建补丁文件
 cat > ldid_fixes.patch << 'EOF'
 --- a/ldid.cpp
 +++ b/ldid.cpp
@@ -130,4 +147,38 @@ git apply ldid_fixes.patch
 
 # 设置 OpenSSL 路径
 export CFLAGS="-I$BUILD_TEMP/openssl_install/include"
-export LDFL
+export LDFLAGS="-L$BUILD_TEMP/openssl_install/lib"
+export CPPFLAGS="$CFLAGS"
+export CXXFLAGS="$CFLAGS"
+
+# 编译 ldid（使用 Makefile）
+make -j$(sysctl -n hw.ncpu) -f Makefile
+
+# 安装
+mkdir -p "$BUILD_TEMP/ldid_install/bin"
+cp ldid "$BUILD_TEMP/ldid_install/bin/"
+if [ -f libldid.a ]; then
+    mkdir -p "$BUILD_TEMP/ldid_install/lib"
+    cp libldid.a "$BUILD_TEMP/ldid_install/lib/"
+fi
+
+cd ..
+echo -e "${GREEN}✅ ldid 编译完成${NC}"
+
+# ============================================================
+# 4. 可选：编译 zsign（如需要）
+# ============================================================
+# echo -e "\n============================================================"
+# echo "📦 [4/4] 编译 zsign"
+# echo "============================================================"
+# cd "$BUILD_TEMP"
+# git clone --depth 1 https://github.com/zhlynn/zsign.git
+# cd zsign
+# # 根据项目要求编译，可能需要额外步骤
+# # ...
+# cd ..
+# echo -e "${GREEN}✅ zsign 编译完成${NC}"
+
+echo -e "\n${GREEN}============================================================${NC}"
+echo -e "${GREEN}  所有静态库编译完成！${NC}"
+echo -e "${GREEN}============================================================${NC}"
