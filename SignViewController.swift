@@ -16,26 +16,30 @@ class SignViewController: UIViewController {
     private let contentView = UIView()
 
     private let engineSegment = UISegmentedControl(items: SigningService.SignConfig.Engine.allCases.map { $0.rawValue })
-    private let modeSegment = UISegmentedControl(items: SigningService.SignConfig.Mode.allCases.map { $0.rawValue })
+    private var pseudoSwitch: UISwitch!
+    private var pseudoLabel: UILabel!
+
+    // 动态控件（将根据引擎/模式重新创建）
+    private var teamIDField: UITextField?
+    private var passwordField: UITextField?
+    private var certTableView: UITableView?
+    private var provTableView: UITableView?
+    private var zsignAdhocSwitch: UISwitch?   // zsign 伪签名专用开关
 
     private var ipaLabel: UILabel!
-    private var certTableView: UITableView!
-    private var provTableView: UITableView!
     private var outputTextView: UITextView!
 
-    private var teamIDField: UITextField!
     private var bundleIDField: UITextField!
     private var displayNameField: UITextField!
-    private var passwordField: UITextField!
     private var entTextView: UITextView!
 
-    private var switchPlatform: UISwitch!
+    private var switchPlatform: UISwitch?
     private var switchRemoveLimits: UISwitch!
 
     private var signButton: UIButton!
     private var installButton: UIButton!
     private var progressBar: UIProgressView!
-    
+
     private var lastSignedPath: String?
 
     // MARK: - 布局常量
@@ -48,14 +52,10 @@ class SignViewController: UIViewController {
         title = "签名"
         view.backgroundColor = Theme.bg
         setupScrollView()
+        loadDefaultPresets()
         refreshData()
         buildUI()
-        
-        // 从设置读取默认引擎
-        if let savedEngine = UserDefaults.standard.string(forKey: "defaultSignEngine") {
-            config.engine = savedEngine == "zsign" ? .zsign : .ldid2
-        }
-        
+
         NotificationCenter.default.addObserver(self, selector: #selector(openIPA(_:)), name: NSNotification.Name("OpenIPA"), object: nil)
     }
 
@@ -66,24 +66,37 @@ class SignViewController: UIViewController {
         updateProvisioningTable()
     }
 
+    // MARK: - 读取用户预设
+    private func loadDefaultPresets() {
+        let defaultEngine = UserDefaults.standard.string(forKey: "defaultSignEngine") ?? "ldid2"
+        config.engine = defaultEngine == "zsign" ? .zsign : .ldid2
+
+        let defaultPseudo = UserDefaults.standard.bool(forKey: "defaultPseudoMode")
+        config.mode = defaultPseudo ? .adhoc : .real
+
+        if let defaultTeamID = UserDefaults.standard.string(forKey: "defaultTeamID"), !defaultTeamID.isEmpty {
+            config.teamID = defaultTeamID
+        }
+    }
+
     // MARK: - 数据刷新
     private func refreshData() {
         let certsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Certificates").path
         try? FileManager.default.createDirectory(atPath: certsDir, withIntermediateDirectories: true)
-        
+
         availableCerts = (try? FileManager.default.contentsOfDirectory(atPath: certsDir))?.filter { name in
             let ext = (name as NSString).pathExtension.lowercased()
             return ["p12", "crt", "key", "pem", "cer", "der"].contains(ext)
         } ?? []
-        
+
         let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
         availableProvisionings = (try? FileManager.default.contentsOfDirectory(atPath: docsDir))?.filter {
             $0.hasSuffix(".mobileprovision")
         } ?? []
     }
 
-    // MARK: - UI 构建
+    // MARK: - UI 设置
     private func setupScrollView() {
         scrollView.frame = view.bounds
         scrollView.alwaysBounceVertical = true
@@ -114,14 +127,33 @@ class SignViewController: UIViewController {
         contentView.addSubview(engineSegment)
         y += 44
 
-        // ---- 模式选择 ----
-        addSectionTitle("签名模式", at: &y)
-        modeSegment.frame = CGRect(x: pad, y: y, width: contentWidth, height: 32)
-        modeSegment.selectedSegmentIndex = (config.mode == .adhoc) ? 0 : 1
-        modeSegment.addTarget(self, action: #selector(modeChanged(_:)), for: .valueChanged)
-        styleSegment(modeSegment)
-        contentView.addSubview(modeSegment)
-        y += 44
+        // ---- 伪签名模式开关（卡片样式）----
+        let modeCard = UIView(frame: CGRect(x: pad, y: y, width: contentWidth, height: 52))
+        modeCard.backgroundColor = Theme.card
+        modeCard.layer.cornerRadius = 12
+
+        let modeLabel = UILabel()
+        modeLabel.text = "伪签名模式"
+        modeLabel.textColor = .white
+        modeLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        modeLabel.translatesAutoresizingMaskIntoConstraints = false
+        modeCard.addSubview(modeLabel)
+
+        pseudoSwitch = UISwitch()
+        pseudoSwitch.isOn = (config.mode == .adhoc)
+        pseudoSwitch.onTintColor = Theme.accent
+        pseudoSwitch.addTarget(self, action: #selector(pseudoSwitchChanged(_:)), for: .valueChanged)
+        pseudoSwitch.translatesAutoresizingMaskIntoConstraints = false
+        modeCard.addSubview(pseudoSwitch)
+
+        NSLayoutConstraint.activate([
+            modeLabel.leadingAnchor.constraint(equalTo: modeCard.leadingAnchor, constant: 16),
+            modeLabel.centerYAnchor.constraint(equalTo: modeCard.centerYAnchor),
+            pseudoSwitch.trailingAnchor.constraint(equalTo: modeCard.trailingAnchor, constant: -16),
+            pseudoSwitch.centerYAnchor.constraint(equalTo: modeCard.centerYAnchor)
+        ])
+        contentView.addSubview(modeCard)
+        y += 60
 
         // ---- IPA 选择 ----
         addSectionTitle("IPA 文件", at: &y)
@@ -137,35 +169,34 @@ class SignViewController: UIViewController {
         contentView.addSubview(ipaLabel)
         y += 24
 
-        // ---- 证书密码 ----
+        // ---- 真签名模式通用控件（密码 + 证书）----
         if config.mode == .real {
+            // 证书密码
             addSectionTitle("证书密码", at: &y)
-            passwordField = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
-            passwordField.borderStyle = .roundedRect
-            passwordField.backgroundColor = .darkGray
-            passwordField.textColor = .white
-            passwordField.placeholder = "密码（默认：troll）"
-            passwordField.text = config.certPassword
-            passwordField.isSecureTextEntry = true
-            passwordField.returnKeyType = .done
-            passwordField.delegate = self
-            passwordField.addTarget(self, action: #selector(passwordChanged(_:)), for: .editingChanged)
-            
-            // 显示/隐藏密码按钮
+            let pwdField = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
+            pwdField.borderStyle = .roundedRect
+            pwdField.backgroundColor = .darkGray
+            pwdField.textColor = .white
+            pwdField.placeholder = "密码（默认：troll）"
+            pwdField.text = config.certPassword
+            pwdField.isSecureTextEntry = true
+            pwdField.returnKeyType = .done
+            pwdField.delegate = self
+            pwdField.addTarget(self, action: #selector(passwordChanged(_:)), for: .editingChanged)
+
             let showHideBtn = UIButton(type: .system)
             showHideBtn.setImage(UIImage(systemName: "eye"), for: .normal)
             showHideBtn.tintColor = .gray
             showHideBtn.frame = CGRect(x: 0, y: 0, width: 30, height: 30)
             showHideBtn.addTarget(self, action: #selector(togglePasswordVisibility), for: .touchUpInside)
-            passwordField.rightView = showHideBtn
-            passwordField.rightViewMode = .always
-            
-            contentView.addSubview(passwordField)
-            y += 46
-        }
+            pwdField.rightView = showHideBtn
+            pwdField.rightViewMode = .always
 
-        // ---- 证书列表 ----
-        if config.mode == .real {
+            contentView.addSubview(pwdField)
+            passwordField = pwdField
+            y += 46
+
+            // 证书列表
             addSectionTitle("选择证书", at: &y)
             if availableCerts.isEmpty {
                 let emptyLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
@@ -176,82 +207,44 @@ class SignViewController: UIViewController {
                 y += 40
             } else {
                 let certTableHeight = min(CGFloat(availableCerts.count * 44), 200)
-                certTableView = UITableView(frame: CGRect(x: pad, y: y, width: contentWidth, height: certTableHeight))
-                certTableView.delegate = self
-                certTableView.dataSource = self
-                certTableView.backgroundColor = .clear
-                certTableView.tag = 1
-                certTableView.isScrollEnabled = false
-                certTableView.register(UITableViewCell.self, forCellReuseIdentifier: "certCell")
-                contentView.addSubview(certTableView)
+                let certTV = UITableView(frame: CGRect(x: pad, y: y, width: contentWidth, height: certTableHeight))
+                certTV.delegate = self
+                certTV.dataSource = self
+                certTV.backgroundColor = .clear
+                certTV.tag = 1
+                certTV.isScrollEnabled = false
+                certTV.register(UITableViewCell.self, forCellReuseIdentifier: "certCell")
+                contentView.addSubview(certTV)
+                certTableView = certTV
                 y += certTableHeight + 8
             }
         }
 
-        // ---- 描述文件列表 ----
-        if config.mode == .real && config.engine == .zsign {
-            addSectionTitle("描述文件（可选）", at: &y)
-            if availableProvisionings.isEmpty {
-                let emptyLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
-                emptyLabel.text = "没有描述文件"
-                emptyLabel.textColor = .gray
-                emptyLabel.font = .systemFont(ofSize: 13)
-                contentView.addSubview(emptyLabel)
-                y += 40
-            } else {
-                let provTableHeight = min(CGFloat(availableProvisionings.count * 44), 120)
-                provTableView = UITableView(frame: CGRect(x: pad, y: y, width: contentWidth, height: provTableHeight))
-                provTableView.delegate = self
-                provTableView.dataSource = self
-                provTableView.backgroundColor = .clear
-                provTableView.tag = 2
-                provTableView.isScrollEnabled = false
-                provTableView.register(UITableViewCell.self, forCellReuseIdentifier: "provCell")
-                contentView.addSubview(provTableView)
-                y += provTableHeight + 8
-            }
-        }
-
-        // ---- Team ID / Ad-hoc 选项 ----
+        // ---- 引擎专属控件 ----
         if config.mode == .adhoc {
-            addSectionTitle("Ad-hoc 选项", at: &y)
-            let teamLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 20))
-            teamLabel.text = "Team ID（可选）"
-            teamLabel.textColor = .white
-            teamLabel.font = .systemFont(ofSize: 13)
-            contentView.addSubview(teamLabel)
-            y += 24
-
-            teamIDField = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
-            teamIDField.borderStyle = .roundedRect
-            teamIDField.backgroundColor = .darkGray
-            teamIDField.textColor = .white
-            teamIDField.placeholder = "例如：0000000000"
-            teamIDField.text = config.teamID
-            teamIDField.returnKeyType = .done
-            teamIDField.delegate = self
-            teamIDField.addTarget(self, action: #selector(teamIDChanged(_:)), for: .editingChanged)
-            contentView.addSubview(teamIDField)
-            y += 46
-
-            switchPlatform = makeSwitchRow("Platform Application", isOn: config.platformApp) { [weak self] on in
-                self?.config.platformApp = on
+            // 伪签名模式
+            if config.engine == .ldid2 {
+                addLdid2AdhocOptions(at: &y)
+            } else if config.engine == .zsign {
+                addZsignAdhocOptions(at: &y)
             }
-            switchPlatform.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
-            contentView.addSubview(switchPlatform)
-            y += 52
+        } else {
+            // 真签名模式：zsign 需要描述文件
+            if config.engine == .zsign {
+                addProvisioningTable(at: &y)
+            }
         }
 
-        // ---- Bundle ID & Display Name ----
+        // ---- 通用修改选项 ----
         addSectionTitle("应用修改（可选）", at: &y)
-        
+
         let bidLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 20))
         bidLabel.text = "新 Bundle ID"
         bidLabel.textColor = .white
         bidLabel.font = .systemFont(ofSize: 13)
         contentView.addSubview(bidLabel)
         y += 24
-        
+
         bundleIDField = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
         bundleIDField.borderStyle = .roundedRect
         bundleIDField.backgroundColor = .darkGray
@@ -270,7 +263,7 @@ class SignViewController: UIViewController {
         dnLabel.font = .systemFont(ofSize: 13)
         contentView.addSubview(dnLabel)
         y += 24
-        
+
         displayNameField = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
         displayNameField.borderStyle = .roundedRect
         displayNameField.backgroundColor = .darkGray
@@ -283,27 +276,29 @@ class SignViewController: UIViewController {
         contentView.addSubview(displayNameField)
         y += 48
 
-        // ---- 移除设备限制 ----
-        switchRemoveLimits = makeSwitchRow("移除设备限制", isOn: config.removeDeviceLimits) { [weak self] on in
+        // 移除设备限制
+        let removeLimitRow = makeSwitchRow("移除设备限制", isOn: config.removeDeviceLimits) { [weak self] on in
             self?.config.removeDeviceLimits = on
         }
-        switchRemoveLimits.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
-        contentView.addSubview(switchRemoveLimits)
+        removeLimitRow.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
+        contentView.addSubview(removeLimitRow)
+        switchRemoveLimits = removeLimitRow.subviews.compactMap { $0 as? UISwitch }.first
         y += 52
 
-        // ---- 自定义 Entitlements ----
+        // 自定义 Entitlements
         addSectionTitle("自定义 Entitlements（plist XML）", at: &y)
-        entTextView = UITextView(frame: CGRect(x: pad, y: y, width: contentWidth, height: 120))
-        entTextView.font = .systemFont(ofSize: 10, design: .monospaced)
-        entTextView.backgroundColor = UIColor(white: 0.12, alpha: 1)
-        entTextView.textColor = .white
-        entTextView.layer.cornerRadius = 8
-        entTextView.text = config.entitlementContent
-        entTextView.delegate = self
-        contentView.addSubview(entTextView)
+        let textView = UITextView(frame: CGRect(x: pad, y: y, width: contentWidth, height: 120))
+        textView.font = .systemFont(ofSize: 10, design: .monospaced)
+        textView.backgroundColor = UIColor(white: 0.12, alpha: 1)
+        textView.textColor = .white
+        textView.layer.cornerRadius = 8
+        textView.text = config.entitlementContent
+        textView.delegate = self
+        contentView.addSubview(textView)
+        entTextView = textView
         y += 128
 
-        // ---- 进度条 ----
+        // 进度条
         progressBar = UIProgressView(progressViewStyle: .default)
         progressBar.frame = CGRect(x: pad, y: y, width: contentWidth, height: 4)
         progressBar.progressTintColor = Theme.accent
@@ -311,7 +306,7 @@ class SignViewController: UIViewController {
         contentView.addSubview(progressBar)
         y += 16
 
-        // ---- 签名按钮 ----
+        // 签名按钮
         signButton = UIButton(type: .system)
         signButton.frame = CGRect(x: pad, y: y, width: contentWidth, height: 50)
         signButton.setTitle("开始签名", for: .normal)
@@ -323,7 +318,7 @@ class SignViewController: UIViewController {
         contentView.addSubview(signButton)
         y += 58
 
-        // ---- 安装按钮 ----
+        // 安装按钮
         installButton = UIButton(type: .system)
         installButton.frame = CGRect(x: pad, y: y, width: contentWidth, height: 44)
         installButton.setTitle("安装已签名的 IPA…", for: .normal)
@@ -336,47 +331,119 @@ class SignViewController: UIViewController {
         contentView.addSubview(installButton)
         y += 52
 
-        // ---- 输出 ----
+        // 输出日志
         addSectionTitle("输出日志", at: &y)
-        outputTextView = UITextView(frame: CGRect(x: pad, y: y, width: contentWidth, height: 200))
-        outputTextView.font = .systemFont(ofSize: 10, design: .monospaced)
-        outputTextView.isEditable = false
-        outputTextView.backgroundColor = UIColor(white: 0.12, alpha: 1)
-        outputTextView.textColor = .white
-        outputTextView.layer.cornerRadius = 8
-        outputTextView.text = ""
-        contentView.addSubview(outputTextView)
+        let outView = UITextView(frame: CGRect(x: pad, y: y, width: contentWidth, height: 200))
+        outView.font = .systemFont(ofSize: 10, design: .monospaced)
+        outView.isEditable = false
+        outView.backgroundColor = UIColor(white: 0.12, alpha: 1)
+        outView.textColor = .white
+        outView.layer.cornerRadius = 8
+        outView.text = ""
+        contentView.addSubview(outView)
+        outputTextView = outView
         y += 216
 
         contentView.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: y + 40)
         scrollView.contentSize = contentView.frame.size
     }
 
-    // MARK: - UI 更新
-    private func updateCertTable() {
-        certTableView?.reloadData()
-        if let ct = certTableView {
-            let h = min(CGFloat(availableCerts.count * 44), 200)
-            ct.frame.size.height = h
+    // MARK: - 引擎专属选项构建
+    private func addLdid2AdhocOptions(at y: inout CGFloat) {
+        addSectionTitle("ldid2 伪签名选项", at: &y)
+
+        let teamLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 20))
+        teamLabel.text = "Team ID（可选）"
+        teamLabel.textColor = .white
+        teamLabel.font = .systemFont(ofSize: 13)
+        contentView.addSubview(teamLabel)
+        y += 24
+
+        let tf = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
+        tf.borderStyle = .roundedRect
+        tf.backgroundColor = .darkGray
+        tf.textColor = .white
+        tf.placeholder = "例如：0000000000"
+        tf.text = config.teamID
+        tf.returnKeyType = .done
+        tf.delegate = self
+        tf.addTarget(self, action: #selector(teamIDChanged(_:)), for: .editingChanged)
+        contentView.addSubview(tf)
+        teamIDField = tf
+        y += 46
+
+        let platformRow = makeSwitchRow("Platform Application", isOn: config.platformApp) { [weak self] on in
+            self?.config.platformApp = on
+        }
+        platformRow.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
+        contentView.addSubview(platformRow)
+        switchPlatform = platformRow.subviews.compactMap { $0 as? UISwitch }.first
+        y += 52
+    }
+
+    private func addZsignAdhocOptions(at y: inout CGFloat) {
+        addSectionTitle("zsign 伪签名选项", at: &y)
+        // 可以添加 zsign 特有的额外开关，例如强制重签等，这里做一个示范开关
+        let extraRow = makeSwitchRow("启用额外 Entitlements 合并", isOn: false) { [weak self] on in
+            // 可根据需要调整 config 或生成不同的 entitlements
+            if on {
+                self?.config.entitlementContent = (self?.config.entitlementContent ?? "") + "\n<!-- extra flags -->"
+            }
+        }
+        extraRow.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
+        contentView.addSubview(extraRow)
+        zsignAdhocSwitch = extraRow.subviews.compactMap { $0 as? UISwitch }.first
+        y += 52
+    }
+
+    private func addProvisioningTable(at y: inout CGFloat) {
+        addSectionTitle("描述文件（可选）", at: &y)
+        if availableProvisionings.isEmpty {
+            let emptyLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
+            emptyLabel.text = "没有描述文件"
+            emptyLabel.textColor = .gray
+            emptyLabel.font = .systemFont(ofSize: 13)
+            contentView.addSubview(emptyLabel)
+            y += 40
+        } else {
+            let provTableHeight = min(CGFloat(availableProvisionings.count * 44), 120)
+            let pv = UITableView(frame: CGRect(x: pad, y: y, width: contentWidth, height: provTableHeight))
+            pv.delegate = self
+            pv.dataSource = self
+            pv.backgroundColor = .clear
+            pv.tag = 2
+            pv.isScrollEnabled = false
+            pv.register(UITableViewCell.self, forCellReuseIdentifier: "provCell")
+            contentView.addSubview(pv)
+            provTableView = pv
+            y += provTableHeight + 8
         }
     }
 
+    // MARK: - UI 更新辅助
+    private func updateCertTable() {
+        guard let tv = certTableView else { return }
+        let newHeight = min(CGFloat(availableCerts.count * 44), 200)
+        tv.frame.size.height = newHeight
+        tv.reloadData()
+    }
+
     private func updateProvisioningTable() {
-        provTableView?.reloadData()
-        if let pt = provTableView {
-            let h = min(CGFloat(availableProvisionings.count * 44), 120)
-            pt.frame.size.height = h
-        }
+        guard let tv = provTableView else { return }
+        let newHeight = min(CGFloat(availableProvisionings.count * 44), 120)
+        tv.frame.size.height = newHeight
+        tv.reloadData()
     }
 
     // MARK: - Actions
     @objc private func engineChanged(_ sender: UISegmentedControl) {
         config.engine = sender.selectedSegmentIndex == 0 ? .ldid2 : .zsign
+        config.mode = .adhoc   // 重置为伪签名模式
         buildUI()
     }
 
-    @objc private func modeChanged(_ sender: UISegmentedControl) {
-        config.mode = sender.selectedSegmentIndex == 0 ? .adhoc : .real
+    @objc private func pseudoSwitchChanged(_ sender: UISwitch) {
+        config.mode = sender.isOn ? .adhoc : .real
         buildUI()
     }
 
@@ -403,8 +470,7 @@ class SignViewController: UIViewController {
         installButton.isHidden = true
         progressBar.isHidden = false
         progressBar.progress = 0.0
-        
-        // 动画进度
+
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
             guard let self = self, !self.progressBar.isHidden else {
                 timer.invalidate()
@@ -418,18 +484,16 @@ class SignViewController: UIViewController {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let signedPath = SigningService.signIPA(config: self.config)
-            
+
             DispatchQueue.main.async {
                 self.signButton.isEnabled = true
                 self.progressBar.isHidden = true
-                
+
                 if let path = signedPath {
                     self.lastSignedPath = path
                     self.outputTextView.text += "✅ 签名成功！\n📁 \(path)\n"
                     self.installButton.isHidden = false
                     self.installButton.setTitle("安装已签名的 IPA…", for: .normal)
-                    
-                    // 自动弹出操作选择
                     self.showPostSignOptions(signedPath: path)
                 } else {
                     self.outputTextView.text += "❌ 签名失败\n"
@@ -438,12 +502,12 @@ class SignViewController: UIViewController {
             }
         }
     }
-    
+
     @objc private func installLastSigned() {
         guard let path = lastSignedPath else { return }
         showInstallForSigned(signedPath: path)
     }
-    
+
     // MARK: - 签名后操作
     private func showPostSignOptions(signedPath: String) {
         let alert = UIAlertController(
@@ -451,54 +515,42 @@ class SignViewController: UIViewController {
             message: "对已签名的 IPA 执行操作",
             preferredStyle: .actionSheet
         )
-        
         alert.addAction(UIAlertAction(title: "📤 分享", style: .default) { [weak self] _ in
             self?.shareSignedIPA(path: signedPath)
         })
-        
         alert.addAction(UIAlertAction(title: "📲 安装…", style: .default) { [weak self] _ in
             self?.showInstallForSigned(signedPath: signedPath)
         })
-        
         alert.addAction(UIAlertAction(title: "✕ 关闭", style: .cancel))
-        
+
         if let pop = alert.popoverPresentationController {
             pop.sourceView = view
             pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
         }
         present(alert, animated: true)
     }
-    
+
     private func showInstallForSigned(signedPath: String) {
         let alert = UIAlertController(
             title: "选择安装方式",
             message: nil,
             preferredStyle: .actionSheet
         )
-        
-        alert.addAction(UIAlertAction(
-            title: "📦 itunesstored（巨魔商店）",
-            style: .default
-        ) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "📦 itunesstored（巨魔商店）", style: .default) { [weak self] _ in
             self?.installSigned(path: signedPath, method: .itunesstored)
         })
-        
-        alert.addAction(UIAlertAction(
-            title: "⚙️ 系统直接安装",
-            style: .default
-        ) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "⚙️ 系统直接安装", style: .default) { [weak self] _ in
             self?.installSigned(path: signedPath, method: .systemInstall)
         })
-        
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        
+
         if let pop = alert.popoverPresentationController {
             pop.sourceView = view
             pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
         }
         present(alert, animated: true)
     }
-    
+
     private func installSigned(path: String, method: InstallMethod) {
         guard RootHelper.hasSystemPrivileges else {
             let alert = UIAlertController(
@@ -510,18 +562,17 @@ class SignViewController: UIViewController {
             present(alert, animated: true)
             return
         }
-        
+
         outputTextView.text += "\n📲 正在安装（\(method.description)）…\n"
         installButton.isEnabled = false
         progressBar.isHidden = false
         progressBar.progress = 0.3
-        
+
         InstallManager.shared.install(ipaPath: path, method: method) { [weak self] result in
             guard let self = self else { return }
-            
             self.installButton.isEnabled = true
             self.progressBar.isHidden = true
-            
+
             if result.success {
                 self.outputTextView.text += "✅ 安装成功！（耗时 \(String(format: "%.1f", result.duration)) 秒）\n\(result.message)\n"
             } else {
@@ -529,7 +580,7 @@ class SignViewController: UIViewController {
             }
         }
     }
-    
+
     private func shareSignedIPA(path: String) {
         let url = URL(fileURLWithPath: path)
         let avc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
@@ -540,16 +591,17 @@ class SignViewController: UIViewController {
         present(avc, animated: true)
     }
 
-    // MARK: - 文本字段变化
+    // MARK: - 文本字段回调
     @objc private func teamIDChanged(_ tf: UITextField) { config.teamID = tf.text ?? "" }
     @objc private func bundleIDChanged(_ tf: UITextField) { config.bundleId = tf.text?.isEmpty == true ? nil : tf.text }
     @objc private func displayNameChanged(_ tf: UITextField) { config.displayName = tf.text?.isEmpty == true ? nil : tf.text }
     @objc private func passwordChanged(_ tf: UITextField) { config.certPassword = tf.text ?? "troll" }
-    
+
     @objc private func togglePasswordVisibility() {
-        passwordField.isSecureTextEntry.toggle()
-        let btn = passwordField.rightView as? UIButton
-        let imageName = passwordField.isSecureTextEntry ? "eye" : "eye.slash"
+        guard let field = passwordField else { return }
+        field.isSecureTextEntry.toggle()
+        let btn = field.rightView as? UIButton
+        let imageName = field.isSecureTextEntry ? "eye" : "eye.slash"
         btn?.setImage(UIImage(systemName: imageName), for: .normal)
     }
 
@@ -640,7 +692,7 @@ extension SignViewController: UITableViewDelegate, UITableViewDataSource {
             cell.textLabel?.text = name
             cell.imageView?.image = UIImage(systemName: "doc.badge.key")
             cell.imageView?.tintColor = .systemYellow
-            
+
             let certPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Certificates/\(name)").path
             cell.accessoryType = (config.certPath == certPath) ? .checkmark : .none
@@ -649,7 +701,7 @@ extension SignViewController: UITableViewDelegate, UITableViewDataSource {
             cell.textLabel?.text = name
             cell.imageView?.image = UIImage(systemName: "doc.badge.gearshape")
             cell.imageView?.tintColor = .systemGreen
-            
+
             let provPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent(name).path
             cell.accessoryType = (config.provPath == provPath) ? .checkmark : .none
