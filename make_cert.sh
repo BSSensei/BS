@@ -51,7 +51,7 @@ openssl x509 -req \
 echo "✅ 中间 CA"
 
 # ============================================================
-# 3. 签名证书（正确格式）
+# 3. 签名证书（全部 OID 使用 DER:05:00 或 ASN1:NULL）
 # ============================================================
 echo ">>> [3/3] 签名证书..."
 
@@ -65,16 +65,16 @@ prompt = no
 C = US
 O = Apple Inc.
 OU = ${TEAM_ID}
-CN = Apple Development Applications
+CN = Apple Development
 
 [v3_ext]
 basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature
 extendedKeyUsage = codeSigning
 1.2.840.113635.100.6.1.3 = DER:05:00
-1.2.840.113635.100.6.1.19 = IA5STRING:iOS Development
-1.2.840.113635.100.6.2.1 = IA5STRING:Apple Worldwide Developer Relations
-1.2.840.113635.100.6.2.6 = IA5STRING:Apple Developer
+1.2.840.113635.100.6.1.19 = DER：05:00
+1.2.840.113635.100.6.2.1 = ASN1:NULL
+1.2.840.113635.100.6.2.6 = DER:05:00
 1.2.840.113635.100.6.2.18 = DER:05:00
 EOF
 
@@ -105,7 +105,7 @@ openssl pkcs12 -export \
     -keypbe NONE -certpbe NONE \
     -passout "pass:${CERT_PASS}" \
     -out "${OUTPUT_DIR}/identity.p12" \
-    -name "Apple Development Applications"
+    -name "Apple Development"
 echo "    → identity.p12"
 
 cat "${OUTPUT_DIR}/codeca_cert.crt" "${OUTPUT_DIR}/root_cert.crt" > "${OUTPUT_DIR}/chain.crt"
@@ -117,7 +117,7 @@ openssl pkcs12 -export \
     -keypbe NONE -certpbe NONE \
     -passout "pass:${CERT_PASS}" \
     -out "${OUTPUT_DIR}/fullchain.p12" \
-    -name "Apple Development Applications"
+    -name "Apple Development"
 echo "    → fullchain.p12"
 
 # ============================================================
@@ -202,6 +202,7 @@ cat > "${OUTPUT_DIR}/info.txt" << EOF
 
   📱 cert.mobileconfig → Safari打开安装
   ✍️  fullchain.p12 → 代码签名
+  📋 identity.p12 → 单身份查看
 ============================================
 EOF
 
