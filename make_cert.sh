@@ -24,7 +24,7 @@ openssl req -newkey rsa:2048 -nodes \
     -x509 -days 2912000 \
     -out "${OUTPUT_DIR}/root_cert.crt" \
     -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple Root CA" \
-    -addext "1.2.840.113635.100.6.2.18=DER:0500" \
+    -addext "1.2.840.113635.100.6.2.18=DER:05:00" \
     -addext "basicConstraints=critical,CA:true" \
     -addext "keyUsage=critical,digitalSignature,keyCertSign,cRLSign"
 echo "✅ Root CA"
@@ -37,7 +37,7 @@ openssl req -newkey rsa:2048 -nodes \
     -keyout "${OUTPUT_DIR}/codeca_key.key" \
     -out "${OUTPUT_DIR}/codeca_csr.csr" \
     -subj "/C=US/O=Apple Inc./OU=Apple Certification Authority/CN=Apple iPhone Certification Authority" \
-    -addext "1.2.840.113635.100.6.2.18=DER:0500" \
+    -addext "1.2.840.113635.100.6.2.18=DER:05:00" \
     -addext "basicConstraints=critical,CA:true" \
     -addext "keyUsage=critical,keyCertSign,cRLSign"
 
@@ -51,11 +51,10 @@ openssl x509 -req \
 echo "✅ 中间 CA"
 
 # ============================================================
-# 3. 签名证书（用配置文件确保 OID 正确）
+# 3. 签名证书（正确格式）
 # ============================================================
 echo ">>> [3/3] 签名证书..."
 
-# 生成 OpenSSL 配置文件（确保 6.1.3 = DER:0500）
 cat > /tmp/leaf.conf << EOF
 [req]
 distinguished_name = req_distinguished_name
@@ -66,19 +65,17 @@ prompt = no
 C = US
 O = Apple Inc.
 OU = ${TEAM_ID}
-CN = Apple Development
+CN = Apple Development Applications
 
 [v3_ext]
 basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature
 extendedKeyUsage = codeSigning
 1.2.840.113635.100.6.1.3 = DER:05:00
-1.2.840.113635.100.6.1.2 = ASN1:NULL
-1.2.840.113635.100.6.1.4 = ASN1:NULL
-1.2.840.113635.100.6.2.1 = ASN1:NULL
-1.2.840.113635.100.6.2.6 = ASN1:NULL
+1.2.840.113635.100.6.1.19 = IA5STRING:iOS Development
+1.2.840.113635.100.6.2.1 = IA5STRING:Apple Worldwide Developer Relations
+1.2.840.113635.100.6.2.6 = IA5STRING:Apple Developer
 1.2.840.113635.100.6.2.18 = DER:05:00
-1.2.840.113635.100.6.1.19 = ASN1:NULL
 EOF
 
 openssl req -new -newkey rsa:2048 -nodes \
@@ -102,7 +99,6 @@ echo "✅ 签名证书"
 # ============================================================
 echo ">>> 导出 P12..."
 
-# identity.p12（设置查看用）
 openssl pkcs12 -export \
     -in "${OUTPUT_DIR}/dev_cert.crt" \
     -inkey "${OUTPUT_DIR}/dev_key.key" \
@@ -112,7 +108,6 @@ openssl pkcs12 -export \
     -name "Apple Development Applications"
 echo "    → identity.p12"
 
-# fullchain.p12（签名用）
 cat "${OUTPUT_DIR}/codeca_cert.crt" "${OUTPUT_DIR}/root_cert.crt" > "${OUTPUT_DIR}/chain.crt"
 
 openssl pkcs12 -export \
@@ -128,10 +123,8 @@ echo "    → fullchain.p12"
 # ============================================================
 # 5. CER + mobileconfig
 # ============================================================
-echo ">>> 生成 CER + mobileconfig..."
-
+echo ">>> CER + mobileconfig..."
 openssl x509 -in "${OUTPUT_DIR}/dev_cert.crt" -outform DER -out "${OUTPUT_DIR}/dev_cert.cer"
-
 CERT_B64=$(openssl base64 -in "${OUTPUT_DIR}/dev_cert.cer" | tr -d '\n')
 
 cat > "${OUTPUT_DIR}/cert.mobileconfig" << EOFMOBILE
@@ -175,13 +168,12 @@ ${CERT_B64}
 </dict>
 </plist>
 EOFMOBILE
-
 echo "    → cert.mobileconfig"
 
 # ============================================================
 # 6. Base64 + TXT + 打包
 # ============================================================
-echo ">>> Base64 + 打包..."
+echo ">>> 打包..."
 for f in "${OUTPUT_DIR}"/*.crt "${OUTPUT_DIR}"/*.key "${OUTPUT_DIR}"/*.csr "${OUTPUT_DIR}"/*.p12 "${OUTPUT_DIR}"/*.cer; do
     [ -f "$f" ] && openssl base64 -in "$f" -out "${f}.b64"
 done
@@ -208,8 +200,8 @@ cat > "${OUTPUT_DIR}/info.txt" << EOF
   密码:     ${CERT_PASS}
   有效期:   ~8000年
 
-  📱 cert.mobileconfig  → Safari打开安装
-  ✍️  fullchain.p12      → 代码签名
+  📱 cert.mobileconfig → Safari打开安装
+  ✍️  fullchain.p12 → 代码签名
 ============================================
 EOF
 
@@ -220,5 +212,4 @@ cd "${PROJECT_DIR}"
 echo "============================================"
 echo "  ✅ certificates.zip"
 echo "  🔑 密码: ${CERT_PASS}"
-echo "  📱 cert.mobileconfig → Safari 打开安装"
 echo "============================================"
