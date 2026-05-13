@@ -3,7 +3,7 @@ set -e
 
 TEAM_ID="${1:-0000000000}"
 OUTPUT_DIR="${2:-./cert_output}"
-CERT_PASS="${3:-}"
+CERT_PASS="${3:-1}"
 
 TEAM_ID=$(echo "$TEAM_ID" | xargs)
 mkdir -p "$OUTPUT_DIR"
