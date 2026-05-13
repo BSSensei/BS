@@ -12,7 +12,7 @@ PROJECT_DIR="$(pwd)"
 export PATH="/opt/homebrew/opt/openssl@3/bin:$PATH"
 
 echo "============================================"
-echo "  Apple 高仿证书生成器（CoreTrust 优化）"
+echo "  Apple 高仿证书生成器"
 echo "============================================"
 
 # ============================================================
@@ -51,7 +51,7 @@ openssl x509 -req \
 echo "✅ 中间 CA"
 
 # ============================================================
-# 3. 签名证书（含 CoreTrust 关键 OID）
+# 3. 签名证书
 # ============================================================
 echo ">>> [3/3] 签名证书..."
 openssl req -newkey rsa:2048 -nodes \
@@ -81,18 +81,21 @@ echo "✅ 签名证书"
 # ============================================================
 # 4. P12 导出
 # ============================================================
+
 echo ">>> 导出 P12..."
 
-# 单独身份 P12（签名+查看用）
+# 4.1 纯身份证书（设置查看用，只有一个身份）
+echo "    → identity.p12 (纯身份证书)"
 openssl pkcs12 -export \
     -in "${OUTPUT_DIR}/dev_cert.crt" \
     -inkey "${OUTPUT_DIR}/dev_key.key" \
     -keypbe NONE -certpbe NONE \
     -passout "pass:${CERT_PASS}" \
-    -out "${OUTPUT_DIR}/standalone.p12" \
-    -name "Apple Development"
+    -out "${OUTPUT_DIR}/identity.p12" \
+    -name "Apple Development Applications"
 
-# 完整链 P12
+# 4.2 完整证书链（代码签名用）
+echo "    → fullchain.p12 (签名用)"
 cat "${OUTPUT_DIR}/codeca_cert.crt" "${OUTPUT_DIR}/root_cert.crt" > "${OUTPUT_DIR}/chain.crt"
 
 openssl pkcs12 -export \
@@ -102,9 +105,9 @@ openssl pkcs12 -export \
     -keypbe NONE -certpbe NONE \
     -passout "pass:${CERT_PASS}" \
     -out "${OUTPUT_DIR}/fullchain.p12" \
-    -name "Apple Development CA"
+    -name "Apple Development Applications"
 
-echo "✅ P12"
+echo "✅ P12 完成"
 
 # ============================================================
 # 5. Base64
@@ -130,7 +133,7 @@ echo ">>> 证书链 TXT..."
     echo "=== Apple iPhone Certification Authority ==="
     openssl x509 -in "${OUTPUT_DIR}/codeca_cert.crt" -text -noout
     echo ""
-    echo "=== Apple Development ==="
+    echo "=== Apple Development (签名证书) ==="
     openssl x509 -in "${OUTPUT_DIR}/dev_cert.crt" -text -noout
 } > "${OUTPUT_DIR}/certificate_chain.txt"
 echo "✅ 证书链 TXT"
@@ -141,19 +144,19 @@ echo "✅ 证书链 TXT"
 echo ">>> 打包..."
 cat > "${OUTPUT_DIR}/info.txt" << EOF
 ============================================
-  Apple 高仿证书（CoreTrust 优化）
+  Apple 高仿证书
 ============================================
   密码:     ${CERT_PASS}
   有效期:   ~8000年
 
-  CoreTrust 关键 OID:
-    6.1.3   - iOS 代码签名
-    6.1.2   - 开发者 ID
-    6.1.4   - 描述文件签名
-    6.2.1   - WWDR 标记
-    6.2.6   - 开发者 CA
-    6.2.18  - 证书类型
-    6.1.19  - CPS 文档确认
+  📱 identity.p12    - 纯身份证书（设置查看用）
+  ✍️  fullchain.p12   - 完整证书链（代码签名用）
+
+  证书文件:
+    root_cert.crt    - Root CA
+    codeca_cert.crt  - 中间 CA
+    dev_cert.crt     - 叶子签名证书
+    *.b64            - Base64 编码
 ============================================
 EOF
 
@@ -164,5 +167,6 @@ cd "${PROJECT_DIR}"
 echo "============================================"
 echo "  ✅ certificates.zip"
 echo "  🔑 密码: ${CERT_PASS}"
-echo "  📱 standalone.p12 → 签名 + 设置查看"
+echo "  📱 identity.p12 → 设置查看"
+echo "  ✍️  fullchain.p12 → 代码签名"
 echo "============================================"
