@@ -1,19 +1,48 @@
 #!/bin/bash
-set -e
 
 # ============================================
 #  PermanentStore - 编译 OpenSSL + ldid + zsign 为 Frameworks
-#  日志文件: build_log.txt
 # ============================================
 
 LOG_FILE="$(pwd)/build_log.txt"
 
-echo "============================================================" | tee "$LOG_FILE"
-echo "  PermanentStore 编译日志" | tee -a "$LOG_FILE"
-echo "  开始时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
-echo "============================================================" | tee -a "$LOG_FILE"
-echo "" | tee -a "$LOG_FILE"
+# 清空旧日志
+: > "$LOG_FILE"
 
+# 错误处理函数
+handle_error() {
+    echo "❌ 脚本在第 $1 行出错，退出码: $2" | tee -a "$LOG_FILE"
+    echo "============================================================" | tee -a "$LOG_FILE"
+    echo "  结束时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
+    echo "  状态: 失败 ❌" | tee -a "$LOG_FILE"
+    echo "============================================================" | tee -a "$LOG_FILE"
+    
+    # 即使失败也压缩日志
+    if [ -f "$LOG_FILE" ]; then
+        gzip -f "$LOG_FILE"
+        echo "📥 日志已保存: ${LOG_FILE}.gz" | tee /dev/stderr
+    fi
+    
+    # 如果是 GitHub Actions，把日志内容输出到 stderr
+    if [ -n "$GITHUB_ACTIONS" ]; then
+        echo "::error::构建失败，请下载日志查看详情"
+    fi
+    
+    exit $2
+}
+
+trap 'handle_error $LINENO $?' ERR
+
+# 记录开始
+{
+    echo "============================================================"
+    echo "  PermanentStore 编译日志"
+    echo "  开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "============================================================"
+    echo ""
+} >> "$LOG_FILE"
+
+# 同时输出到终端和日志
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 IOS_MIN="12.0"
@@ -237,24 +266,6 @@ echo "✅ OpenSSL Framework 完成"
 echo ""
 
 # ============================================
-# 打包产物
-# ============================================
-echo "============================================================"
-echo "📦 打包产物"
-echo "============================================================"
-
-# 打包 Frameworks
-cd "$(dirname "$FRAMEWORKS")"
-tar -czf Frameworks.tar.gz Frameworks/
-echo "✅ Frameworks.tar.gz 已创建"
-
-# 压缩日志
-gzip -f "$LOG_FILE"
-echo "✅ ${LOG_FILE}.gz 已创建"
-
-echo ""
-
-# ============================================
 # 结果
 # ============================================
 echo "============================================================"
@@ -264,32 +275,29 @@ echo ""
 find "$FRAMEWORKS" -name "*.framework" -maxdepth 1 -exec echo "📦 {}" \;
 echo ""
 
-echo "📥 产物文件:"
-echo "   $(pwd)/Frameworks.tar.gz"
-echo "   ${LOG_FILE}.gz"
-echo ""
-
 echo "============================================================"
 echo "  结束时间: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  状态: 成功 ✅"
 echo "============================================================"
 
 # ============================================
-# GitHub Actions 上传说明
+# 压缩日志
+# ============================================
+if [ -f "$LOG_FILE" ]; then
+    gzip -f "$LOG_FILE"
+    echo ""
+    echo "📥 日志已压缩: ${LOG_FILE}.gz"
+fi
+
+# ============================================
+# GitHub Actions 提示
 # ============================================
 if [ -n "$GITHUB_ACTIONS" ]; then
     echo ""
-    echo "📤 GitHub Actions 环境检测到"
-    echo "   请在 workflow 中添加以下步骤来上传产物:"
-    echo ""
-    echo "   - name: 上传 Frameworks"
+    echo "📤 在 workflow 中添加以下步骤来上传日志:"
+    echo "   - name: 上传编译日志"
     echo "     uses: actions/upload-artifact@v4"
     echo "     with:"
-    echo "       name: Frameworks"
-    echo "       path: Frameworks.tar.gz"
-    echo ""
-    echo "   - name: 上传日志"
-    echo "     uses: actions/upload-artifact@v4"
-    echo "     with:"
-    echo "       name: Build-Log"
+    echo "       name: build-log"
     echo "       path: build_log.txt.gz"
 fi
