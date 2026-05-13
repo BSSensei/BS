@@ -1,303 +1,133 @@
 #!/bin/bash
+set -e
 
-# ============================================
-#  PermanentStore - 编译 OpenSSL + ldid + zsign 为 Frameworks
-# ============================================
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
 
-LOG_FILE="$(pwd)/build_log.txt"
+# 路径设置
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+BUILD_TEMP="$ROOT_DIR/build_temp"
+mkdir -p "$BUILD_TEMP"
 
-# 清空旧日志
-: > "$LOG_FILE"
+# SDK 路径
+SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+if [ -z "$SDK_PATH" ]; then
+    echo -e "${RED}❌ 无法找到 iPhoneOS SDK${NC}"
+    exit 1
+fi
+echo "✅ SDK: $SDK_PATH"
 
-# 错误处理函数
-handle_error() {
-    echo "❌ 脚本在第 $1 行出错，退出码: $2" | tee -a "$LOG_FILE"
-    echo "============================================================" | tee -a "$LOG_FILE"
-    echo "  结束时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
-    echo "  状态: 失败 ❌" | tee -a "$LOG_FILE"
-    echo "============================================================" | tee -a "$LOG_FILE"
-    
-    # 即使失败也压缩日志
-    if [ -f "$LOG_FILE" ]; then
-        gzip -f "$LOG_FILE"
-        echo "📥 日志已保存: ${LOG_FILE}.gz" | tee /dev/stderr
-    fi
-    
-    # 如果是 GitHub Actions，把日志内容输出到 stderr
-    if [ -n "$GITHUB_ACTIONS" ]; then
-        echo "::error::构建失败，请下载日志查看详情"
-    fi
-    
-    exit $2
-}
-
-trap 'handle_error $LINENO $?' ERR
-
-# 记录开始
-{
-    echo "============================================================"
-    echo "  PermanentStore 编译日志"
-    echo "  开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "============================================================"
-    echo ""
-} >> "$LOG_FILE"
-
-# 同时输出到终端和日志
-exec > >(tee -a "$LOG_FILE") 2>&1
-
-IOS_MIN="12.0"
-ARCH="arm64"
-SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
-echo "✅ SDK: $SYSROOT"
-
-CC="xcrun -sdk iphoneos clang -arch ${ARCH} -mios-version-min=${IOS_MIN} -isysroot ${SYSROOT}"
-CXX="xcrun -sdk iphoneos clang++ -arch ${ARCH} -mios-version-min=${IOS_MIN} -isysroot ${SYSROOT}"
-AR="xcrun -sdk iphoneos ar"
-RANLIB="xcrun -sdk iphoneos ranlib"
-LIPO="xcrun -sdk iphoneos lipo"
-
-BUILD="$(pwd)/build_temp"
-FRAMEWORKS="$(pwd)/Frameworks"
-
+# 清理旧目录
 echo "🔧 清理旧构建目录..."
-rm -rf "$BUILD" "$FRAMEWORKS"
-mkdir -p "$BUILD"
-echo ""
+rm -rf "$BUILD_TEMP/openssl" "$BUILD_TEMP/openssl_install"
+rm -rf "$BUILD_TEMP/libplist" "$BUILD_TEMP/libplist_install"
+rm -rf "$BUILD_TEMP/ldid" "$BUILD_TEMP/ldid_install"
 
-# ======================
-# Framework 创建函数
-# ======================
-create_framework() {
-    local name=$1
-    local lib_path=$2
-    local headers_dir=$3
-    
-    local fw_dir="$FRAMEWORKS/$name.framework"
-    mkdir -p "$fw_dir/Headers"
-    
-    cp "$lib_path" "$fw_dir/$name"
-    
-    if [ -d "$headers_dir" ]; then
-        cp -r "$headers_dir"/* "$fw_dir/Headers/" 2>/dev/null || true
-    fi
-    
-    cat > "$fw_dir/Info.plist" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>$name</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.permanentstore.$name</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundlePackageType</key>
-    <string>FMWK</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-</dict>
-</plist>
-EOF
-
-    echo "✅ $name.framework 创建完成"
-    echo ""
-}
-
-# ============================================
-# 1. 编译 OpenSSL
-# ============================================
-echo "============================================================"
+# ============================================================
+# 1. 编译 OpenSSL（保持不变，但输出路径明确）
+# ============================================================
+echo -e "\n============================================================"
 echo "📦 [1/4] 编译 OpenSSL"
 echo "============================================================"
-cd "$BUILD"
+cd "$BUILD_TEMP"
 git clone --depth 1 https://github.com/openssl/openssl.git
 cd openssl
+./Configure ios64-cross --prefix="$BUILD_TEMP/openssl_install" --openssldir="$BUILD_TEMP/openssl_install/ssl" no-shared no-tests
+make -j$(sysctl -n hw.ncpu)
+make install_sw
+cd ..
+echo -e "${GREEN}✅ OpenSSL 编译完成${NC}"
 
-echo "🔧 Configure..."
-./Configure ios64-cross no-shared no-dso no-asm no-tests no-apps \
-    --prefix="$BUILD/openssl_install" \
-    -mios-version-min=$IOS_MIN
-
-export CROSS_TOP="$(dirname "$(dirname "$SYSROOT")")"
-export CROSS_SDK="$(basename "$SYSROOT")"
-export CFLAGS="-isysroot $SYSROOT -mios-version-min=$IOS_MIN -arch $ARCH"
-export CXXFLAGS="$CFLAGS"
-
-echo "   CROSS_TOP=$CROSS_TOP"
-echo "   CROSS_SDK=$CROSS_SDK"
-echo ""
-
-echo "🔨 生成头文件..."
-make -j$(sysctl -n hw.logicalcpu) build_generated
-
-echo "🔨 编译 libcrypto.a 和 libssl.a..."
-make -j$(sysctl -n hw.logicalcpu) libcrypto.a libssl.a
-
-echo "✅ OpenSSL 编译完成"
-echo ""
-
-# ============================================
-# 2. 编译 libplist（ldid 依赖）
-# ============================================
-echo "============================================================"
+# ============================================================
+# 2. 编译 libplist（修复 config.h 缺失）
+# ============================================================
+echo -e "\n============================================================"
 echo "📦 [2/4] 编译 libplist"
 echo "============================================================"
-cd "$BUILD"
+cd "$BUILD_TEMP"
 git clone --depth 1 https://github.com/libimobiledevice/libplist.git
 cd libplist
+# 修复：生成 config.h
+./autogen.sh --prefix="$BUILD_TEMP/libplist_install" --disable-shared --enable-static
+make -j$(sysctl -n hw.ncpu)
+make install
+cd ..
+echo -e "${GREEN}✅ libplist 编译完成${NC}"
 
-if [ -f "autogen.sh" ]; then
-    ./autogen.sh 2>/dev/null || true
-elif [ -f "configure.ac" ] || [ -f "configure.in" ]; then
-    autoreconf -i 2>/dev/null || true
-fi
-
-if [ -f "configure" ]; then
-    echo "🔧 Configure..."
-    ./configure \
-        --host=arm64-apple-ios \
-        --prefix="$BUILD/libplist_install" \
-        --without-cython \
-        CC="$CC" \
-        CXX="$CXX" \
-        AR="$AR" \
-        RANLIB="$RANLIB"
-    
-    echo "🔨 编译..."
-    make -j$(sysctl -n hw.logicalcpu)
-    make install
-    PLIST_INCLUDE="$BUILD/libplist_install/include"
-    PLIST_LIB="$BUILD/libplist_install/lib"
-else
-    echo "🔧 手动编译..."
-    mkdir -p "$BUILD/libplist_install/include/plist"
-    cp include/plist/*.h "$BUILD/libplist_install/include/plist/" 2>/dev/null || true
-    
-    OBJS=""
-    for f in src/*.c; do
-        [ ! -f "$f" ] && continue
-        echo "  $f"
-        $CC -c "$f" -o "${f%.*}.o" \
-            -Iinclude \
-            -DHAVE_CONFIG_H -O2 || continue
-        OBJS="$OBJS ${f%.*}.o"
-    done
-    
-    PLIST_INCLUDE="$BUILD/libplist_install/include"
-    PLIST_LIB="$(pwd)"
-fi
-
-echo "✅ libplist 编译完成"
-echo ""
-
-# ============================================
-# 3. 编译 ldid
-# ============================================
-echo "============================================================"
+# ============================================================
+# 3. 编译 ldid（修复 OpenSSL 路径和代码问题）
+# ============================================================
+echo -e "\n============================================================"
 echo "📦 [3/4] 编译 ldid"
 echo "============================================================"
-cd "$BUILD"
+cd "$BUILD_TEMP"
 git clone --depth 1 https://github.com/ProcursusTeam/ldid.git
 cd ldid
 
-OBJS=""
-for f in *.cpp *.cc; do
-    [ ! -f "$f" ] && continue
-    [[ "$f" == "main."* ]] && continue
-    echo "  $f"
-    $CXX -c "$f" -o "${f%.*}.o" \
-        -I. \
-        -I"$BUILD/openssl/include" \
-        -I"$PLIST_INCLUDE" \
-        -std=c++17 -O2 && OBJS="$OBJS ${f%.*}.o"
-done
+# 应用补丁
+cat > ldid_fixes.patch << 'EOF'
+--- a/ldid.cpp
++++ b/ldid.cpp
+@@ -35,6 +35,10 @@
+ #include <CommonCrypto/CommonDigest.h>
+ #endif
 
-echo "🔗 链接 libldid.a..."
-$AR rcs libldid.a *.o 2>/dev/null
-$RANLIB libldid.a
++// 定义版本号
++#ifndef LDID_VERSION
++#define LDID_VERSION "2.1.5-procursus"
++#endif
 
-create_framework "ldid" "$(pwd)/libldid.a" "$(pwd)"
-cp "$BUILD/openssl/include/openssl" "$FRAMEWORKS/ldid.framework/Headers/" -r 2>/dev/null || true
-echo "✅ ldid 完成"
-echo ""
+ // 避免与标准库的 get 冲突
+ static void x509_get(std::string &value, X509_NAME *name, int nid) {
+@@ -2448,9 +2452,9 @@
+     }
 
-# ============================================
-# 4. 编译 zsign
-# ============================================
-echo "============================================================"
-echo "📦 [4/4] 编译 zsign"
-echo "============================================================"
-cd "$BUILD"
-git clone --depth 1 https://github.com/zhlynn/zsign.git
-cd zsign
+     // Get Team ID and Common Name
+-    get(team, name, NID_organizationalUnitName);
++    x509_get(team, name, NID_organizationalUnitName);
+     if (team.empty())
+-        get(team, name, NID_organizationName);
++        x509_get(team, name, NID_organizationName);
 
-for f in *.cpp *.cc; do
-    [ ! -f "$f" ] && continue
-    [[ "$f" == "main."* ]] && continue
-    echo "  $f"
-    $CXX -c "$f" -o "${f%.*}.o" \
-        -I"$BUILD/openssl/include" \
-        -I. \
-        -std=c++17 -O2
-done
+     // Extract the Common Name (CN)
+     std::string common;
+@@ -2458,9 +2462,9 @@
+     //   the NID_commonName may appear multiple times, pick the last one? For
+     //   now we prefer the CN that's also a "iPhone Developer: ..." pattern
+     //   as seen in the wild? maybe not? just pick the last one.
+-    get(common, name, NID_commonName);
++    x509_get(common, name, NID_commonName);
+     if (common.empty())
+-        get(common, name, NID_pkcs9_emailAddress);
++        x509_get(common, name, NID_pkcs9_emailAddress);
 
-echo "🔗 链接 libzsign.a..."
-$AR rcs libzsign.a *.o
-$RANLIB libzsign.a
+     // Sometimes CN is stored in UID (Mac Developer)
+     if (common.empty())
+@@ -4085,7 +4089,7 @@
+                                 size_t pos = 0;
+                                 int lastpos = -1;
+                                 X509_NAME_ENTRY *e = NULL;
+-                                X509_NAME *nm = X509_get_subject_name(x);
++                                X509_NAME *nm = const_cast<X509_NAME*>(X509_get_subject_name(x));
+                                 while ((e = X509_NAME_get_entry(nm, ++lastpos))) {
+                                     ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
+                                     std::string value((char *)ASN1_STRING_get0_data(s), ASN1_STRING_length(s));
+@@ -4094,7 +4098,7 @@
+                                 lastpos = -1;
+                                 while ((e = X509_NAME_get_entry(nm, ++lastpos))) {
+                                     ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
+-                                    if (ASN1_STRING_type(s) != V_ASN1_PRINTABLESTRING && ASN1_STRING_type(s) != V_ASN1_T61STRING)
++                                    if (ASN1_STRING_type(s) != V_ASN1_PRINTABLESTRING && ASN1_STRING_type(s) != V_ASN1_T61STRING && ASN1_STRING_type(s) != V_ASN1_UTF8STRING)
+                                         continue;
+                                     std::string value((char *)ASN1_STRING_get0_data(s), ASN1_STRING_length(s));
+                                     if (pos == 0)
+EOF
 
-create_framework "zsign" "$(pwd)/libzsign.a" "$(pwd)"
-echo "✅ zsign 完成"
-echo ""
+git apply ldid_fixes.patch
 
-# ============================================
-# 5. OpenSSL Framework（合并 libcrypto + libssl）
-# ============================================
-echo "============================================================"
-echo "📦 创建 OpenSSL Framework"
-echo "============================================================"
-cd "$BUILD/openssl"
-
-echo "🔗 合并 libcrypto.a + libssl.a -> libopenssl.a"
-$LIPO -create libcrypto.a libssl.a -output libopenssl.a
-
-create_framework "OpenSSL" "$(pwd)/libopenssl.a" "$(pwd)/include"
-echo "✅ OpenSSL Framework 完成"
-echo ""
-
-# ============================================
-# 结果
-# ============================================
-echo "============================================================"
-echo "✅ 所有 Framework 生成完毕！"
-echo "============================================================"
-echo ""
-find "$FRAMEWORKS" -name "*.framework" -maxdepth 1 -exec echo "📦 {}" \;
-echo ""
-
-echo "============================================================"
-echo "  结束时间: $(date '+%Y-%m-%d %H:%M:%S')"
-echo "  状态: 成功 ✅"
-echo "============================================================"
-
-# ============================================
-# 压缩日志
-# ============================================
-if [ -f "$LOG_FILE" ]; then
-    gzip -f "$LOG_FILE"
-    echo ""
-    echo "📥 日志已压缩: ${LOG_FILE}.gz"
-fi
-
-# ============================================
-# GitHub Actions 提示
-# ============================================
-if [ -n "$GITHUB_ACTIONS" ]; then
-    echo ""
-    echo "📤 在 workflow 中添加以下步骤来上传日志:"
-    echo "   - name: 上传编译日志"
-    echo "     uses: actions/upload-artifact@v4"
-    echo "     with:"
-    echo "       name: build-log"
-    echo "       path: build_log.txt.gz"
-fi
+# 设置 OpenSSL 路径
+export CFLAGS="-I$BUILD_TEMP/openssl_install/include"
+export LDFL
