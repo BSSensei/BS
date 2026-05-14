@@ -22,23 +22,24 @@ OID_APPLE_EXT = ObjectIdentifier("1.2.840.113635.100.6")
 OID_MAP_DER  = {i: ObjectIdentifier(f"1.2.840.113635.100.6.1.{i}") for i in range(1, 11)}
 OID_MAP_STR  = {i: ObjectIdentifier(f"1.2.840.113635.100.6.1.{i}") for i in range(11, 27)}
 
-OID_WWDR     = ObjectIdentifier("1.2.840.113635.100.6.2.1")     # WWDR → ASN1:NULL
-OID_DEV_CA   = ObjectIdentifier("1.2.840.113635.100.6.2.6")     # 开发者CA → ASN1:NULL
-OID_CERT_TYPE= ObjectIdentifier("1.2.840.113635.100.6.2.18")    # 证书类型 → DER:0500
-OID_INTEG    = ObjectIdentifier("1.2.840.113635.100.6.3.1")     # 系统完整性
-OID_SEC_BOOT = ObjectIdentifier("1.2.840.113635.100.6.3.2")     # 安全启动
-OID_POLICY   = ObjectIdentifier("1.2.840.113635.100.5.1")       # 证书策略
+OID_WWDR     = ObjectIdentifier("1.2.840.113635.100.6.2.1")
+OID_DEV_CA   = ObjectIdentifier("1.2.840.113635.100.6.2.6")
+OID_CERT_TYPE= ObjectIdentifier("1.2.840.113635.100.6.2.18")
+OID_INTEG    = ObjectIdentifier("1.2.840.113635.100.6.3.1")
+OID_SEC_BOOT = ObjectIdentifier("1.2.840.113635.100.6.3.2")
+OID_POLICY   = ObjectIdentifier("1.2.840.113635.100.5.1")
 
 def gen_key():
     return rsa.generate_private_key(65537, 2048, default_backend())
 
-def make_cert(subject, issuer, issuer_key, ca=False, leaf=False):
+def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     builder = x509.CertificateBuilder()
     builder = builder.subject_name(subject)
     builder = builder.issuer_name(issuer)
     builder = builder.serial_number(x509.random_serial_number())
-    builder = builder.not_valid_before(datetime.datetime.utcnow())
-    builder = builder.not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=2912000))
+    builder = builder.not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+    builder = builder.not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2912000))
+    builder = builder.public_key(subject_key.public_key())
 
     if ca:
         builder = builder.add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
@@ -79,7 +80,7 @@ root_subj = x509.Name([x509.NameAttribute(x509.oid.NameOID.COUNTRY_NAME, "US"),
                        x509.NameAttribute(x509.oid.NameOID.ORGANIZATION_NAME, "Apple Inc."),
                        x509.NameAttribute(x509.oid.NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority"),
                        x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "Apple Root CA")])
-root_cert = make_cert(root_subj, root_subj, root_key, ca=True)
+root_cert = make_cert(root_subj, root_subj, root_key, root_key, ca=True)
 
 with open(f"{OUTPUT_DIR}/root_cert.crt", "wb") as f: f.write(root_cert.public_bytes(serialization.Encoding.PEM))
 with open(f"{OUTPUT_DIR}/root_key.key", "wb") as f: f.write(root_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
@@ -91,7 +92,7 @@ codeca_subj = x509.Name([x509.NameAttribute(x509.oid.NameOID.COUNTRY_NAME, "US")
                          x509.NameAttribute(x509.oid.NameOID.ORGANIZATION_NAME, "Apple Inc."),
                          x509.NameAttribute(x509.oid.NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority"),
                          x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "Apple iPhone Certification Authority")])
-codeca_cert = make_cert(codeca_subj, root_subj, root_key, ca=True)
+codeca_cert = make_cert(codeca_subj, root_subj, root_key, codeca_key, ca=True)
 
 with open(f"{OUTPUT_DIR}/codeca_cert.crt", "wb") as f: f.write(codeca_cert.public_bytes(serialization.Encoding.PEM))
 with open(f"{OUTPUT_DIR}/codeca_key.key", "wb") as f: f.write(codeca_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
@@ -103,7 +104,7 @@ dev_subj = x509.Name([x509.NameAttribute(x509.oid.NameOID.COUNTRY_NAME, "US"),
                       x509.NameAttribute(x509.oid.NameOID.ORGANIZATION_NAME, "Apple Inc."),
                       x509.NameAttribute(x509.oid.NameOID.ORGANIZATIONAL_UNIT_NAME, TEAM_ID),
                       x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "Apple Development")])
-dev_cert = make_cert(dev_subj, codeca_subj, codeca_key, leaf=True)
+dev_cert = make_cert(dev_subj, codeca_subj, codeca_key, dev_key, leaf=True)
 
 with open(f"{OUTPUT_DIR}/dev_cert.crt", "wb") as f: f.write(dev_cert.public_bytes(serialization.Encoding.PEM))
 with open(f"{OUTPUT_DIR}/dev_key.key", "wb") as f: f.write(dev_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
