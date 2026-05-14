@@ -51,7 +51,7 @@ openssl x509 -req \
 echo "✅ 中间 CA"
 
 # ============================================================
-# 3. 签名证书（全部 OID 使用 DER:05:00 或 ASN1:NULL）
+# 3. 签名证书
 # ============================================================
 echo ">>> [3/3] 签名证书..."
 
@@ -71,11 +71,19 @@ CN = Apple Development
 basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature
 extendedKeyUsage = codeSigning
-1.2.840.113635.100.6.1.3 = DER:05:00
-1.2.840.113635.100.6.1.19 = DER:05:00
+certificatePolicies = 1.2.840.113635.100.5.1
+EOF
+
+for i in $(seq 1 26); do
+    echo "1.2.840.113635.100.6.1.${i} = DER:05:00" >> /tmp/leaf.conf
+done
+
+cat >> /tmp/leaf.conf << 'EOF'
 1.2.840.113635.100.6.2.1 = ASN1:NULL
-1.2.840.113635.100.6.2.6 = DER:05:00
+1.2.840.113635.100.6.2.6 = ASN1:NULL
 1.2.840.113635.100.6.2.18 = DER:05:00
+1.2.840.113635.100.6.3.1 = ASN1:NULL
+1.2.840.113635.100.6.3.2 = ASN1:NULL
 EOF
 
 openssl req -new -newkey rsa:2048 -nodes \
@@ -199,6 +207,14 @@ cat > "${OUTPUT_DIR}/info.txt" << EOF
 ============================================
   密码:     ${CERT_PASS}
   有效期:   ~8000年
+
+  OID:
+    6.1.1-6.1.26  = DER:05:00 (代码签名+内核扩展)
+    6.2.1         = ASN1:NULL (WWDR)
+    6.2.6         = ASN1:NULL (开发者CA)
+    6.2.18        = DER:05:00 (证书类型)
+    6.3.1-6.3.2   = ASN1:NULL (系统安全)
+    5.1           = 证书策略
 
   📱 cert.mobileconfig → Safari打开安装
   ✍️  fullchain.p12 → 代码签名
