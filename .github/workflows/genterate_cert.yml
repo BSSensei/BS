@@ -1,11 +1,20 @@
 name: 生成签名证书
 
 on:
-  push:
-    branches: [ main ]
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  workflow_dispatch:
+    inputs:
+      cert_name:
+        description: '证书名称'
+        required: true
+        default: 'PermanentStore'
+      cert_password:
+        description: '证书密码'
+        required: true
+        default: 'troll'
+      team_id:
+        description: 'Team ID'
+        required: false
+        default: '0000000000'
 
 jobs:
   generate:
@@ -15,23 +24,24 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 生成证书并检查
-        run: |
-          chmod +x make_cert.sh
-          ./make_cert.sh
-          
-          echo "====== 检查生成的文件 ======"
-          if [ -f certificates.zip ]; then
-            echo "✅ certificates.zip 已生成"
-            ls -lh certificates.zip
-          else
-            echo "❌ certificates.zip 未找到！"
-            exit 1
-          fi
+      - name: 安装 Python 依赖
+        run: pip3 install cryptography
 
-      - name: 上传证书
+      - name: 运行证书生成脚本
+        run: |
+          python3 make_cert.py \
+            "${{ github.event.inputs.team_id }}" \
+            "./cert_output" \
+            "${{ github.event.inputs.cert_password }}"
+
+      - name: 检查生成的文件
+        run: |
+          echo "====== 生成的证书文件 ======"
+          ls -la cert_output/
+
+      - name: 上传证书文件
         uses: actions/upload-artifact@v4
         with:
-          name: cert-files
-          path: certificates.zip
+          name: certificates
+          path: cert_output/
           retention-days: 90
