@@ -14,7 +14,7 @@ on:
       team_id:
         description: 'Team ID（可选，如 0000000000）'
         required: false
-        default: ''
+        default: '0000000000'
       days:
         description: '证书有效期（天）'
         required: false
@@ -28,16 +28,27 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置执行权限
-        run: chmod +x make_cert.sh
+      - name: 安装 Python 依赖
+        run: pip3 install cryptography
 
       - name: 运行证书生成脚本
         run: |
-          bash make_cert.sh \
-            "${{ github.event.inputs.cert_name }}" \
-            "${{ github.event.inputs.cert_password }}" \
+          python3 make_cert.py \
             "${{ github.event.inputs.team_id }}" \
-            "${{ github.event.inputs.days }}"
+            "./cert_output" \
+            "${{ github.event.inputs.cert_password }}"
 
-      - name: 查找生成的证书文件
-        id: find_cert
+      - name: 检查生成的文件
+        run: |
+          echo "====== 生成的证书文件 ======"
+          ls -la cert_output/
+          ls -la certificates.zip 2>/dev/null || echo "ZIP 尚未生成"
+
+      - name: 上传证书文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: certificates
+          path: |
+            cert_output/
+            certificates.zip
+          retention-days: 90
