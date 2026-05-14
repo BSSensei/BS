@@ -15,10 +15,6 @@ on:
         description: 'Team ID（可选，如 0000000000）'
         required: false
         default: '0000000000'
-      days:
-        description: '证书有效期（天）'
-        required: false
-        default: '3650'
 
 jobs:
   generate:
@@ -37,12 +33,6 @@ jobs:
             "${{ github.event.inputs.team_id }}" \
             "./cert_output" \
             "${{ github.event.inputs.cert_password }}"
-
-      - name: 检查生成的文件
-        run: |
-          echo "====== 生成的证书文件 ======"
-          ls -la cert_output/
-          ls -la certificates.zip 2>/dev/null || echo "ZIP 尚未生成"
 
       - name: 上传证书文件
         uses: actions/upload-artifact@v4
