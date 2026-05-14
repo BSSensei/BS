@@ -31,7 +31,8 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     builder = x509.CertificateBuilder()
     builder = builder.subject_name(subject)
     builder = builder.issuer_name(issuer)
-    builder = builder.serial_number(x509.random_serial_number())
+    # 序列号保证正整数
+    builder = builder.serial_number(abs(x509.random_serial_number()))
     builder = builder.not_valid_before(datetime.datetime.now(datetime.timezone.utc))
     builder = builder.not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2912000))
     builder = builder.public_key(subject_key.public_key())
@@ -51,17 +52,19 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
         builder = builder.add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.CODE_SIGNING]), critical=False)
         builder = builder.add_extension(x509.CertificatePolicies([x509.PolicyInformation(OID_POLICY, None)]), critical=False)
 
+    # 前10个 OID：空 OCTET STRING
     for i in range(1, 11):
-        builder = builder.add_extension(x509.UnrecognizedExtension(OID_MAP_DER[i], b'\x05\x00'), critical=False)
+        builder = builder.add_extension(x509.UnrecognizedExtension(OID_MAP_DER[i], b'\x04\x00'), critical=False)
+    # 后16个 OID：UTF8String
     for i in range(11, 27):
         builder = builder.add_extension(x509.UnrecognizedExtension(OID_MAP_STR[i], f"Apple Extension {i}".encode()), critical=False)
 
     if leaf:
-        builder = builder.add_extension(x509.UnrecognizedExtension(OID_WWDR, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(x509.UnrecognizedExtension(OID_DEV_CA, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(x509.UnrecognizedExtension(OID_CERT_TYPE, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(x509.UnrecognizedExtension(OID_INTEG, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(x509.UnrecognizedExtension(OID_SEC_BOOT, b'\x05\x00'), critical=False)
+        builder = builder.add_extension(x509.UnrecognizedExtension(OID_WWDR, b'\x05\x00'), critical=False)        # NULL
+        builder = builder.add_extension(x509.UnrecognizedExtension(OID_DEV_CA, b'\x13\x00'), critical=False)      # 空 PrintableString
+        builder = builder.add_extension(x509.UnrecognizedExtension(OID_CERT_TYPE, b'\x04\x06\x0c\x04Apple'), critical=False)  # OCTET STRING 包裹 UTF8String "Apple"
+        builder = builder.add_extension(x509.UnrecognizedExtension(OID_INTEG, b'\x05\x00'), critical=False)        # NULL 标记位
+        builder = builder.add_extension(x509.UnrecognizedExtension(OID_SEC_BOOT, b'\x05\x00'), critical=False)     # NULL 标记位
 
     return builder.sign(issuer_key, hashes.SHA256(), default_backend())
 
