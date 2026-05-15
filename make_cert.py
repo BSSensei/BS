@@ -18,22 +18,22 @@ from cryptography.x509.extensions import (
     UniformResourceIdentifier,
     CertificatePolicies,
     PolicyInformation,
-    CPSQualifier,
     AuthorityInformationAccess,
     AccessDescription,
 )
+from cryptography.x509 import CPSQualifier
 from cryptography.hazmat.primitives.serialization import pkcs12
 
 TEAM_ID = sys.argv[1] if len(sys.argv) > 1 else "0000000000"
 OUTPUT_DIR = sys.argv[2] if len(sys.argv) > 2 else "./cert_output"
-CERT_PASS = "1"
+CERT_PASS = sys.argv[3] if len(sys.argv) > 3 else "1"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
 # OID 定义
 # ============================================================
-OID_LIST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14]  # 全平台 + tvOS
+OID_LIST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14]
 OID_DER = [ObjectIdentifier(f"1.2.840.113635.100.6.1.{i}") for i in OID_LIST]
 OID_WWDR      = ObjectIdentifier("1.2.840.113635.100.6.2.1")
 OID_DEV_CA    = ObjectIdentifier("1.2.840.113635.100.6.2.6")
@@ -43,18 +43,19 @@ OID_SEC_BOOT  = ObjectIdentifier("1.2.840.113635.100.6.3.2")
 OID_POLICY    = ObjectIdentifier("1.2.840.113635.100.5.1")
 
 # ============================================================
-# Cert Type 扩展的值：OCTET STRING 包含 UTF8String "Apple Development"
+# Cert Type 扩展的值：OCTET STRING 包含 UTF8String
+# 真实证书结构: OCTET STRING { UTF8String "Apple Development" }
+# DER: 04 13 0C 11 41 70 70 6C 65 20 44 65 76 65 6C 6F 70 6D 65 6E 74
 # ============================================================
-def build_cert_type_value(type_name="Apple Development"):
-    """构造 OID 100.6.2.18 的 DER 值：OCTET STRING 包裹 UTF8String"""
+def build_cert_type_der(type_name="Apple Development"):
     utf8_bytes = type_name.encode("utf-8")
-    # UTF8String tag = 0x0C, length = len(utf8_bytes)
-    utf8_der = b'\x0C' + bytes([len(utf8_bytes)]) + utf8_bytes
-    # OCTET STRING tag = 0x04, length = len(utf8_der)
-    octet_der = b'\x04' + bytes([len(utf8_der)]) + utf8_der
+    # UTF8String: tag=0x0C, length, value
+    utf8_der = b'\x0C' + len(utf8_bytes).to_bytes(1, 'big') + utf8_bytes
+    # OCTET STRING: tag=0x04, length, value
+    octet_der = b'\x04' + len(utf8_der).to_bytes(1, 'big') + utf8_der
     return octet_der
 
-CERT_TYPE_DER = build_cert_type_value("Apple Development")
+CERT_TYPE_DER = build_cert_type_der("Apple Development")
 
 def gen_key():
     return rsa.generate_private_key(65537, 2048, default_backend())
@@ -147,7 +148,7 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     builder = builder.add_extension(crl_dp, critical=False)
 
     # 授权信息访问 (OCSP) — 仅非根 CA
-    if not ca or (ca and subject != issuer):  # 中间 CA
+    if not ca or (ca and subject != issuer):
         aia = AuthorityInformationAccess([
             AccessDescription(
                 AuthorityInformationAccessOID.OCSP,
@@ -163,7 +164,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
         )
 
     if leaf:
-        # 以下 OID 除了 Cert Type 外，都是 NULL
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_WWDR, b'\x05\x00'), critical=False
         )
