@@ -21,7 +21,6 @@ from cryptography.x509.extensions import (
     AuthorityInformationAccess,
     AccessDescription,
 )
-from cryptography.x509 import CPSQualifier
 from cryptography.hazmat.primitives.serialization import pkcs12
 
 TEAM_ID = sys.argv[1] if len(sys.argv) > 1 else "0000000000"
@@ -49,9 +48,7 @@ OID_POLICY    = ObjectIdentifier("1.2.840.113635.100.5.1")
 # ============================================================
 def build_cert_type_der(type_name="Apple Development"):
     utf8_bytes = type_name.encode("utf-8")
-    # UTF8String: tag=0x0C, length, value
     utf8_der = b'\x0C' + len(utf8_bytes).to_bytes(1, 'big') + utf8_bytes
-    # OCTET STRING: tag=0x04, length, value
     octet_der = b'\x04' + len(utf8_der).to_bytes(1, 'big') + utf8_der
     return octet_der
 
@@ -64,7 +61,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     builder = x509.CertificateBuilder()
     builder = builder.subject_name(subject)
     builder = builder.issuer_name(issuer)
-    # 序列号：正整数且 ≤20 字节
     serial = x509.random_serial_number()
     serial = abs(serial) & ((1 << 159) - 1)
     builder = builder.serial_number(serial)
@@ -75,7 +71,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     pub_key = subject_key.public_key()
     builder = builder.public_key(pub_key)
 
-    # 基本约束和密钥用法
     if ca:
         builder = builder.add_extension(
             x509.BasicConstraints(ca=True, path_length=None), critical=True
@@ -115,20 +110,18 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
         builder = builder.add_extension(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING]), critical=False
         )
-        # 证书策略 (包含 CPS 限定符)
         builder = builder.add_extension(
             CertificatePolicies([
                 PolicyInformation(
                     OID_POLICY,
                     policy_qualifiers=[
-                        CPSQualifier("https://www.apple.com/certificateauthority/")
+                        "https://www.apple.com/certificateauthority/"
                     ],
                 )
             ]),
             critical=False,
         )
 
-    # 标准扩展：Subject Key Identifier & Authority Key Identifier
     builder = builder.add_extension(
         SubjectKeyIdentifier.from_public_key(pub_key), critical=False
     )
@@ -137,7 +130,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     )
     builder = builder.add_extension(aki, critical=False)
 
-    # CRL 分发点
     crl_dp = CRLDistributionPoints([
         DistributionPoint(
             full_name=[UniformResourceIdentifier("http://crl.apple.com/root.crl")],
@@ -147,7 +139,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     ])
     builder = builder.add_extension(crl_dp, critical=False)
 
-    # 授权信息访问 (OCSP) — 仅非根 CA
     if not ca or (ca and subject != issuer):
         aia = AuthorityInformationAccess([
             AccessDescription(
@@ -157,7 +148,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
         ])
         builder = builder.add_extension(aia, critical=False)
 
-    # Apple 自定义 OID（平台授权，值都是 NULL）
     for oid in OID_DER:
         builder = builder.add_extension(
             x509.UnrecognizedExtension(oid, b'\x05\x00'), critical=False
