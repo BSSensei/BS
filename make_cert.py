@@ -23,7 +23,7 @@ from cryptography.x509.extensions import (
 )
 from cryptography.hazmat.primitives.serialization import pkcs12
 
-TEAM_ID = sys.argv[1] if len(sys.argv) > 1 else "0000000000"
+TEAM_ID = sys.argv[1] if len(sys.argv) > 1 else "Apple Inc."
 OUTPUT_DIR = sys.argv[2] if len(sys.argv) > 2 else "./cert_output"
 CERT_PASS = sys.argv[3] if len(sys.argv) > 3 else "1"
 
@@ -35,7 +35,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 OID_LIST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 OID_DER = [ObjectIdentifier(f"1.2.840.113635.100.6.1.{i}") for i in OID_LIST]
 OID_WWDR      = ObjectIdentifier("1.2.840.113635.100.6.2.1")
-OID_DEV_CA    = ObjectIdentifier("1.2.840.113635.100.6.2.6")
 OID_CERT_TYPE = ObjectIdentifier("1.2.840.113635.100.6.2.18")
 OID_INTEG     = ObjectIdentifier("1.2.840.113635.100.6.3.1")
 OID_SEC_BOOT  = ObjectIdentifier("1.2.840.113635.100.6.3.2")
@@ -159,9 +158,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
             x509.UnrecognizedExtension(OID_WWDR, b'\x05\x00'), critical=False
         )
         builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_DEV_CA, b'\x05\x00'), critical=False
-        )
-        builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_CERT_TYPE, CERT_TYPE_DER), critical=False
         )
         builder = builder.add_extension(
@@ -192,7 +188,6 @@ with open(f"{OUTPUT_DIR}/root_key.key", "wb") as f:
         serialization.PrivateFormat.TraditionalOpenSSL,
         serialization.NoEncryption(),
     ))
-# 根证书 Base64
 root_b64 = base64.b64encode(root_cert.public_bytes(serialization.Encoding.DER)).decode()
 with open(f"{OUTPUT_DIR}/root_cert_base64.txt", "w") as f:
     f.write(root_b64)
@@ -240,7 +235,6 @@ print("✅ 签名证书")
 
 # ============================================================
 print(">>> P12...")
-# fullchain.p12 — 完整证书链
 p12_full = pkcs12.serialize_key_and_certificates(
     b"Apple Development",
     dev_key,
@@ -250,25 +244,9 @@ p12_full = pkcs12.serialize_key_and_certificates(
 )
 with open(f"{OUTPUT_DIR}/fullchain.p12", "wb") as f:
     f.write(p12_full)
-# fullchain.p12 Base64
 p12_full_b64 = base64.b64encode(p12_full).decode()
 with open(f"{OUTPUT_DIR}/fullchain_base64.txt", "w") as f:
     f.write(p12_full_b64)
-
-# identity.p12 — 仅身份证书
-p12_id = pkcs12.serialize_key_and_certificates(
-    b"Apple Development",
-    dev_key,
-    dev_cert,
-    None,
-    serialization.BestAvailableEncryption(CERT_PASS.encode()),
-)
-with open(f"{OUTPUT_DIR}/identity.p12", "wb") as f:
-    f.write(p12_id)
-# identity.p12 Base64
-p12_id_b64 = base64.b64encode(p12_id).decode()
-with open(f"{OUTPUT_DIR}/identity_base64.txt", "w") as f:
-    f.write(p12_id_b64)
 print("✅ P12 + Base64")
 
 # ============================================================
@@ -317,11 +295,10 @@ with open(f"{OUTPUT_DIR}/cert.mobileconfig", "w") as f:
 print("✅ mobileconfig")
 
 # ============================================================
-# 完整证书链 TXT（包含 PEM 链，可导入系统）
+# 完整证书链 TXT + PEM
 # ============================================================
-print(">>> 完整证书链 TXT...")
+print(">>> 完整证书链 TXT + PEM...")
 
-# PEM 链文本
 pem_chain = b""
 pem_chain += dev_pem + b"\n"
 pem_chain += codeca_pem + b"\n"
@@ -370,7 +347,6 @@ chain_text.append("=" * 60)
 chain_text.append("  Chain Integrity Verification")
 chain_text.append("=" * 60)
 
-# 简化签名验证
 try:
     codeca_key.public_key().verify(
         dev_cert.signature,
