@@ -23,6 +23,8 @@ XCODE_CONFIGURATION="Release"
 BUNDLE_ID="com.permanentstore.app"
 
 IPA_OUTPUT="$ROOT_DIR/IPA"
+ENTITLEMENTS_FILE="$ROOT_DIR/entitlements.plist"
+
 mkdir -p "$BUILD_TEMP" "$FRAMEWORKS_OUTPUT" "$IPA_OUTPUT"
 
 DEVICE_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -41,6 +43,11 @@ echo -e "📱 设备 SDK: $DEVICE_SDK_PATH"
 echo -e "🖥️ 模拟器 SDK: $SIMULATOR_SDK_PATH"
 echo -e "📦 Framework 输出: $FRAMEWORKS_OUTPUT"
 echo -e "📱 IPA 输出: $IPA_OUTPUT"
+if [ -f "$ENTITLEMENTS_FILE" ]; then
+    echo -e "🔐 Entitlements: $ENTITLEMENTS_FILE"
+else
+    echo -e "${YELLOW}⚠️ 未找到 entitlements.plist 文件${NC}"
+fi
 
 # ============================================================
 # 辅助函数
@@ -138,6 +145,30 @@ EOF
     fi
 }
 
+# 合并 entitlements 到 app
+merge_entitlements() {
+    local app_path=$1
+    local entitlements_file=$2
+    
+    if [ ! -f "$entitlements_file" ]; then
+        echo -e "${YELLOW}  ⚠️ 未找到 entitlements.plist，跳过合并${NC}"
+        return 0
+    fi
+    
+    local entitlements_dest="$app_path/entitlements.plist"
+    
+    # 复制 entitlements 文件
+    cp "$entitlements_file" "$entitlements_dest"
+    echo -e "${GREEN}  ✅ 已合并 entitlements.plist${NC}"
+    
+    # 可选：使用 ldid 签名（如果有 ldid framework）
+    local ldid_path="$FRAMEWORKS_OUTPUT/ldid.xcframework/ios-arm64/ldid"
+    if [ -f "$ldid_path" ]; then
+        echo "  正在使用 ldid 签名..."
+        "$ldid_path" -S"$entitlements_dest" "$app_path/PermanentStore" 2>/dev/null || true
+    fi
+}
+
 # ============================================================
 # 1. 编译 OpenSSL Framework
 # ============================================================
@@ -182,15 +213,18 @@ export CROSS_TOP="$(xcrun --sdk iphonesimulator --show-sdk-platform-path)/Develo
 export CROSS_SDK="iPhoneSimulator${SDK_VERSION}.sdk"
 export CC="xcrun -sdk iphonesimulator clang -arch x86_64"
 
+# 修复：使用正确的 Configure 语法
 ./Configure iossimulator-x86_64 \
     --prefix="$BUILD_TEMP/openssl_simulator" \
-    no-shared no-tests \
-    -isysroot "$SIMULATOR_SDK_PATH" -mios-version-min=12.0
+    no-shared no-tests
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ OpenSSL Configure 失败 (x86_64)${NC}"
     exit 1
 fi
+
+# 修改 Makefile，添加编译参数
+perl -pi -e 's|CC=.*|CC=xcrun -sdk iphonesimulator clang -arch x86_64 -isysroot '"$SIMULATOR_SDK_PATH"' -mios-version-min=12.0|g' Makefile
 
 make -j$(sysctl -n hw.ncpu)
 if [ $? -ne 0 ]; then
@@ -275,52 +309,6 @@ if [ ! -d "ldid_src" ]; then
     git clone --depth 1 https://github.com/ProcursusTeam/ldid.git ldid_src
 fi
 cd ldid_src
-
-# 创建补丁
-cat > ldid_fixes.patch << 'EOF'
---- a/ldid.cpp
-+++ b/ldid.cpp
-@@ -35,6 +35,10 @@
- #include <CommonCrypto/CommonDigest.h>
- #endif
-
-+#ifndef LDID_VERSION
-+#define LDID_VERSION "2.1.5"
-+#endif
-+
- static void x509_get(std::string &value, X509_NAME *name, int nid) {
-@@ -2448,9 +2452,9 @@
-     }
- 
--    get(team, name, NID_organizationalUnitName);
-+    x509_get(team, name, NID_organizationalUnitName);
-     if (team.empty())
--        get(team, name, NID_organizationName);
-+        x509_get(team, name, NID_organizationName);
- 
-     std::string common;
--    get(common, name, NID_commonName);
-+    x509_get(common, name, NID_commonName);
-     if (common.empty())
--        get(common, name, NID_pkcs9_emailAddress);
-+        x509_get(common, name, NID_pkcs9_emailAddress);
- 
-@@ -4085,7 +4089,7 @@
-                                 int lastpos = -1;
-                                 X509_NAME_ENTRY *e = NULL;
--                                X509_NAME *nm = X509_get_subject_name(x);
-+                                X509_NAME *nm = const_cast<X509_NAME*>(X509_get_subject_name(x));
-                                 while ((e = X509_NAME_get_entry(nm, ++lastpos))) {
-                                     ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
-@@ -4094,7 +4098,7 @@
-                                 while ((e = X509_NAME_get_entry(nm, ++lastpos))) {
-                                     ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
--                                    if (ASN1_STRING_type(s) != V_ASN1_PRINTABLESTRING && ASN1_STRING_type(s) != V_ASN1_T61STRING)
-+                                    if (ASN1_STRING_type(s) != V_ASN1_PRINTABLESTRING && ASN1_STRING_type(s) != V_ASN1_T61STRING && ASN1_STRING_type(s) != V_ASN1_UTF8STRING)
-                                         continue;
-EOF
-
-git apply ldid_fixes.patch 2>/dev/null || true
 
 OPENSSL_DEVICE="$BUILD_TEMP/openssl_device"
 OPENSSL_SIM="$BUILD_TEMP/openssl_simulator"
@@ -477,6 +465,15 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# 合并 entitlements 到 app
+echo "  合并 entitlements..."
+APP_PATH="$ARCHIVE_PATH/Products/Applications/PermanentStore.app"
+if [ -d "$APP_PATH" ]; then
+    merge_entitlements "$APP_PATH" "$ENTITLEMENTS_FILE"
+else
+    echo -e "${YELLOW}  ⚠️ 未找到 .app 目录，跳过 entitlements 合并${NC}"
+fi
+
 # 导出 IPA
 echo "  导出 IPA..."
 EXPORT_OPTIONS_PLIST="$BUILD_TEMP/exportOptions.plist"
@@ -495,6 +492,10 @@ cat > "$EXPORT_OPTIONS_PLIST" << EOF
     <false/>
     <key>uploadSymbols</key>
     <false/>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>provisioningProfiles</key>
+    <dict/>
 </dict>
 </plist>
 EOF
@@ -508,8 +509,32 @@ xcodebuild -exportArchive \
 IPA_FILE=$(find "$IPA_OUTPUT" -name "*.ipa" | head -1)
 if [ -n "$IPA_FILE" ] && [ -f "$IPA_FILE" ]; then
     # 重命名带版本号
-    mv "$IPA_FILE" "$IPA_OUTPUT/PermanentStore_${VERSION}_${BUILD}.ipa" 2>/dev/null || true
-    echo -e "${GREEN}✅ IPA 生成成功: $IPA_OUTPUT/PermanentStore_${VERSION}_${BUILD}.ipa${NC}"
+    FINAL_IPA="$IPA_OUTPUT/PermanentStore_${VERSION}_${BUILD}.ipa"
+    mv "$IPA_FILE" "$FINAL_IPA" 2>/dev/null || true
+    
+    # 如果 entitlements 存在，尝试注入到 IPA 中
+    if [ -f "$ENTITLEMENTS_FILE" ]; then
+        echo "  将 entitlements 注入到 IPA..."
+        # 解压 IPA
+        TEMP_IPA_EXTRACT="$BUILD_TEMP/ipa_extract"
+        rm -rf "$TEMP_IPA_EXTRACT"
+        mkdir -p "$TEMP_IPA_EXTRACT"
+        unzip -q "$FINAL_IPA" -d "$TEMP_IPA_EXTRACT"
+        
+        # 复制 entitlements
+        if [ -d "$TEMP_IPA_EXTRACT/Payload/PermanentStore.app" ]; then
+            cp "$ENTITLEMENTS_FILE" "$TEMP_IPA_EXTRACT/Payload/PermanentStore.app/entitlements.plist"
+            
+            # 重新打包
+            cd "$TEMP_IPA_EXTRACT"
+            zip -qr "$FINAL_IPA" .
+            cd - > /dev/null
+            rm -rf "$TEMP_IPA_EXTRACT"
+            echo -e "${GREEN}  ✅ entitlements 已注入到 IPA${NC}"
+        fi
+    fi
+    
+    echo -e "${GREEN}✅ IPA 生成成功: $FINAL_IPA${NC}"
 else
     echo -e "${YELLOW}⚠️ IPA 文件未找到，Archive 位于: $ARCHIVE_PATH${NC}"
 fi
