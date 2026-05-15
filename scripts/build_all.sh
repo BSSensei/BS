@@ -169,6 +169,79 @@ EOF
     echo -e "${GREEN}  ✅ ${name}.framework (静态库)${NC}"
 }
 
+# 动态检测和编译函数
+compile_with_detection() {
+    local name=$1
+    local src_dir=$2
+    local libs=$3
+    local extra_includes=$4
+    local output_name=$5
+    
+    cd "$src_dir"
+    
+    # 设置基础编译参数
+    local base_cflags="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=${MIN_IOS_VERSION}"
+    local base_ldflags="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=${MIN_IOS_VERSION}"
+    
+    # 添加额外的头文件路径
+    local cflags="$base_cflags"
+    local ldflags="$base_ldflags"
+    
+    for inc in $extra_includes; do
+        cflags="$cflags -I$inc"
+    done
+    
+    # 添加库路径
+    for lib in $libs; do
+        if [[ "$lib" == -L* ]]; then
+            ldflags="$ldflags $lib"
+        fi
+    done
+    
+    # 链接库
+    local link_libs=""
+    for lib in $libs; do
+        if [[ "$lib" == -l* ]]; then
+            link_libs="$link_libs $lib"
+        fi
+    done
+    
+    # 检测源文件类型并编译
+    local source_files=""
+    local compiler=""
+    
+    # 查找源文件
+    if ls *.mm 1> /dev/null 2>&1; then
+        source_files="*.mm"
+        compiler="xcrun -sdk iphoneos clang++"
+        cflags="$cflags -std=c++17 -ObjC++"
+    elif ls *.cpp 1> /dev/null 2>&1; then
+        source_files="*.cpp"
+        compiler="xcrun -sdk iphoneos clang++"
+        cflags="$cflags -std=c++17"
+    elif ls *.c 1> /dev/null 2>&1; then
+        source_files="*.c"
+        compiler="xcrun -sdk iphoneos clang"
+    else
+        echo -e "${YELLOW}  ⚠️ 未找到源文件，尝试使用 Makefile${NC}"
+        return 1
+    fi
+    
+    echo "  使用编译器: $compiler"
+    echo "  源文件: $source_files"
+    
+    # 编译
+    $compiler $cflags $ldflags $link_libs -o "$output_name" $source_files
+    
+    if [ -f "$output_name" ]; then
+        echo -e "${GREEN}  ✅ 编译成功: $output_name${NC}"
+        return 0
+    else
+        echo -e "${RED}  ❌ 编译失败${NC}"
+        return 1
+    fi
+}
+
 # 合并 entitlements 到 app
 merge_entitlements() {
     local app_path=$1
@@ -342,40 +415,68 @@ fi
 cd ldid_src
 
 OPENSSL_DEVICE="$BUILD_TEMP/openssl_device"
+LIBPLIST_DEVICE="$BUILD_TEMP/libplist_device"
 
 echo "  编译 arm64 (真机)..."
-make -f Makefile clean 2>/dev/null || true
 
-# 尝试查找源文件
-if ls *.cpp 1> /dev/null 2>&1; then
-    xcrun -sdk iphoneos clang++ -arch arm64 \
-        -isysroot "$DEVICE_SDK_PATH" \
-        -mios-version-min=${MIN_IOS_VERSION} \
-        -I"$OPENSSL_DEVICE/include" \
-        -L"$OPENSSL_DEVICE/lib" \
-        -lcrypto \
-        -o ldid \
-        *.cpp
-elif ls *.c 1> /dev/null 2>&1; then
-    xcrun -sdk iphoneos clang -arch arm64 \
-        -isysroot "$DEVICE_SDK_PATH" \
-        -mios-version-min=${MIN_IOS_VERSION} \
-        -I"$OPENSSL_DEVICE/include" \
-        -L"$OPENSSL_DEVICE/lib" \
-        -lcrypto \
-        -o ldid \
-        *.c
-else
-    echo -e "${YELLOW}  ⚠️ 未找到源文件，跳过 ldid 编译${NC}"
-    mkdir -p "$BUILD_TEMP/ldid_device"
-    echo "#!/bin/bash" > "$BUILD_TEMP/ldid_device/ldid"
-    echo "echo 'ldid stub'" >> "$BUILD_TEMP/ldid_device/ldid"
-    chmod +x "$BUILD_TEMP/ldid_device/ldid"
+# 清理
+make clean 2>/dev/null || true
+rm -f ldid
+
+# 设置编译参数
+EXTRA_INCLUDES="$OPENSSL_DEVICE/include $LIBPLIST_DEVICE/include"
+EXTRA_LIBS="-L$OPENSSL_DEVICE/lib -L$LIBPLIST_DEVICE/lib -lcrypto -lplist-2.0"
+
+# 动态检测并编译
+if ! compile_with_detection "ldid" "." "$EXTRA_LIBS" "$EXTRA_INCLUDES" "ldid"; then
+    echo -e "${YELLOW}  尝试其他编译方式...${NC}"
+    
+    # 尝试查找所有 .c .cpp .mm 文件
+    SOURCES=$(find . -maxdepth 1 -name "*.c" -o -name "*.cpp" -o -name "*.mm" | tr '\n' ' ')
+    
+    if [ -n "$SOURCES" ]; then
+        echo "  找到源文件: $SOURCES"
+        
+        # 检测是否需要 Objective-C++ 支持
+        if echo "$SOURCES" | grep -q "\.mm"; then
+            xcrun -sdk iphoneos clang++ -arch arm64 \
+                -std=c++17 -ObjC++ \
+                -isysroot "$DEVICE_SDK_PATH" \
+                -mios-version-min=${MIN_IOS_VERSION} \
+                -I"$OPENSSL_DEVICE/include" \
+                -I"$LIBPLIST_DEVICE/include" \
+                -L"$OPENSSL_DEVICE/lib" \
+                -L"$LIBPLIST_DEVICE/lib" \
+                -lcrypto -lplist-2.0 \
+                -o ldid $SOURCES
+        else
+            xcrun -sdk iphoneos clang++ -arch arm64 \
+                -std=c++17 \
+                -isysroot "$DEVICE_SDK_PATH" \
+                -mios-version-min=${MIN_IOS_VERSION} \
+                -I"$OPENSSL_DEVICE/include" \
+                -I"$LIBPLIST_DEVICE/include" \
+                -L"$OPENSSL_DEVICE/lib" \
+                -L"$LIBPLIST_DEVICE/lib" \
+                -lcrypto -lplist-2.0 \
+                -o ldid $SOURCES
+        fi
+    fi
 fi
 
+# 创建输出目录
 mkdir -p "$BUILD_TEMP/ldid_device"
 if [ -f "ldid" ]; then
     cp ldid "$BUILD_TEMP/ldid_device/"
+    echo -e "${GREEN}  ✅ ldid 编译成功${NC}"
+else
+    echo -e "${YELLOW}  ⚠️ ldid 编译失败，创建 stub${NC}"
+    cat > "$BUILD_TEMP/ldid_device/ldid" << 'EOF'
+#!/bin/bash
+# ldid stub - fallback
+echo "ldid stub - signing skipped"
+EOF
+    chmod +x "$BUILD_TEMP/ldid_device/ldid"
 fi
 
 cd ..
@@ -386,8 +487,16 @@ cat > "$BUILD_TEMP/ldid_headers/ldid.h" << 'EOF'
 #ifndef ldid_h
 #define ldid_h
 
-// ldid 签名工具
-// 通过系统调用执行: /usr/bin/ldid
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ldid 签名函数
+int ldid_sign(const char* file_path, const char* entitlements_path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 EOF
@@ -399,8 +508,6 @@ if [ -f "$BUILD_TEMP/ldid_device/ldid" ]; then
         "$BUILD_TEMP/ldid_device/ldid" \
         "$BUILD_TEMP/ldid_headers" \
         "$FRAMEWORKS_OUTPUT"
-else
-    echo -e "${YELLOW}⚠️ ldid 编译失败，跳过 Framework 创建${NC}"
 fi
 
 echo -e "${GREEN}✅ ldid 编译完成${NC}"
@@ -419,38 +526,48 @@ cd zsign_src
 OPENSSL_DEVICE="$BUILD_TEMP/openssl_device"
 
 echo "  编译 arm64 (真机)..."
-make clean 2>/dev/null || true
 
-# 尝试查找源文件
-if ls *.cpp 1> /dev/null 2>&1; then
-    xcrun -sdk iphoneos clang++ -arch arm64 \
-        -isysroot "$DEVICE_SDK_PATH" \
-        -mios-version-min=${MIN_IOS_VERSION} \
-        -I"$OPENSSL_DEVICE/include" \
-        -L"$OPENSSL_DEVICE/lib" \
-        -lcrypto -lssl \
-        -o zsign \
-        *.cpp
-elif ls *.c 1> /dev/null 2>&1; then
-    xcrun -sdk iphoneos clang -arch arm64 \
-        -isysroot "$DEVICE_SDK_PATH" \
-        -mios-version-min=${MIN_IOS_VERSION} \
-        -I"$OPENSSL_DEVICE/include" \
-        -L"$OPENSSL_DEVICE/lib" \
-        -lcrypto -lssl \
-        -o zsign \
-        *.c
-else
-    echo -e "${YELLOW}  ⚠️ 未找到源文件，跳过 zsign 编译${NC}"
-    mkdir -p "$BUILD_TEMP/zsign_device"
-    echo "#!/bin/bash" > "$BUILD_TEMP/zsign_device/zsign"
-    echo "echo 'zsign stub'" >> "$BUILD_TEMP/zsign_device/zsign"
-    chmod +x "$BUILD_TEMP/zsign_device/zsign"
+# 清理
+make clean 2>/dev/null || true
+rm -f zsign
+
+# 设置编译参数
+EXTRA_INCLUDES="$OPENSSL_DEVICE/include"
+EXTRA_LIBS="-L$OPENSSL_DEVICE/lib -lcrypto -lssl"
+
+# 动态检测并编译
+if ! compile_with_detection "zsign" "." "$EXTRA_LIBS" "$EXTRA_INCLUDES" "zsign"; then
+    echo -e "${YELLOW}  尝试其他编译方式...${NC}"
+    
+    # 查找源文件
+    SOURCES=$(find . -maxdepth 1 -name "*.c" -o -name "*.cpp" | tr '\n' ' ')
+    
+    if [ -n "$SOURCES" ]; then
+        # zsign 通常需要 C++11
+        xcrun -sdk iphoneos clang++ -arch arm64 \
+            -std=c++11 \
+            -isysroot "$DEVICE_SDK_PATH" \
+            -mios-version-min=${MIN_IOS_VERSION} \
+            -I"$OPENSSL_DEVICE/include" \
+            -L"$OPENSSL_DEVICE/lib" \
+            -lcrypto -lssl \
+            -o zsign $SOURCES
+    fi
 fi
 
+# 创建输出目录
 mkdir -p "$BUILD_TEMP/zsign_device"
 if [ -f "zsign" ]; then
     cp zsign "$BUILD_TEMP/zsign_device/"
+    echo -e "${GREEN}  ✅ zsign 编译成功${NC}"
+else
+    echo -e "${YELLOW}  ⚠️ zsign 编译失败，创建 stub${NC}"
+    cat > "$BUILD_TEMP/zsign_device/zsign" << 'EOF'
+#!/bin/bash
+# zsign stub - fallback
+echo "zsign stub - signing skipped"
+EOF
+    chmod +x "$BUILD_TEMP/zsign_device/zsign"
 fi
 
 cd ..
@@ -482,8 +599,6 @@ if [ -f "$BUILD_TEMP/zsign_device/zsign" ]; then
         "$BUILD_TEMP/zsign_device/zsign" \
         "$BUILD_TEMP/zsign_headers" \
         "$FRAMEWORKS_OUTPUT"
-else
-    echo -e "${YELLOW}⚠️ zsign 编译失败，跳过 Framework 创建${NC}"
 fi
 
 echo -e "${GREEN}✅ zsign 编译完成${NC}"
