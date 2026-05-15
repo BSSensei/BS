@@ -43,8 +43,6 @@ OID_POLICY    = ObjectIdentifier("1.2.840.113635.100.5.1")
 
 # ============================================================
 # Cert Type 扩展的值：OCTET STRING 包含 UTF8String
-# 真实证书结构: OCTET STRING { UTF8String "Apple Development" }
-# DER: 04 13 0C 11 41 70 70 6C 65 20 44 65 76 65 6C 6F 70 6D 65 6E 74
 # ============================================================
 def build_cert_type_der(type_name="Apple Development"):
     utf8_bytes = type_name.encode("utf-8")
@@ -130,9 +128,11 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     )
     builder = builder.add_extension(aki, critical=False)
 
+    # CRL 分发点 — 新版 cryptography 需要 relative_name 参数
     crl_dp = CRLDistributionPoints([
         DistributionPoint(
             full_name=[UniformResourceIdentifier("http://crl.apple.com/root.crl")],
+            relative_name=None,
             reasons=None,
             crl_issuer=None,
         )
