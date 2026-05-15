@@ -1,0 +1,53 @@
+name: Inspect Apple Root CA Certificate
+
+on:
+  push:                # 每次 push 自动触发
+    paths:
+      - 'Apple Root CA'  # 只有这个文件变化才触发
+  workflow_dispatch:    # 也保留手动触发
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Inspect Certificate
+        run: |
+          echo ">>> Certificate Info <<<"
+          openssl x509 -in "Apple Root CA" -text -noout
+
+          echo ""
+          echo ">>> Searching for Apple-specific OIDs <<<"
+          echo ""
+          echo "--- 1.2.840.113635.100.6.2.1 (WWDR) ---"
+          openssl x509 -in "Apple Root CA" -text -noout | grep -A2 "1\.2\.840\.113635\.100\.6\.2\.1" || echo "Not found"
+
+          echo ""
+          echo "--- 1.2.840.113635.100.6.2.6 (Dev CA) ---"
+          openssl x509 -in "Apple Root CA" -text -noout | grep -A2 "1\.2\.840\.113635\.100\.6\.2\.6" || echo "Not found"
+
+          echo ""
+          echo "--- 1.2.840.113635.100.6.2.18 (Cert Type) ---"
+          openssl x509 -in "Apple Root CA" -text -noout | grep -A2 "1\.2\.840\.113635\.100\.6\.2\.18" || echo "Not found"
+
+          echo ""
+          echo "--- Organizational Unit ---"
+          openssl x509 -in "Apple Root CA" -text -noout | grep "Organizational Unit"
+
+          echo ""
+          echo "--- SHA-256 Fingerprint ---"
+          openssl x509 -in "Apple Root CA" -noout -fingerprint -sha256
+
+          echo ""
+          echo "--- Serial Number ---"
+          openssl x509 -in "Apple Root CA" -noout -serial
+
+          echo ""
+          echo "--- Subject ---"
+          openssl x509 -in "Apple Root CA" -noout -subject
+
+          echo ""
+          echo "--- Issuer ---"
+          openssl x509 -in "Apple Root CA" -noout -issuer
