@@ -51,18 +51,82 @@ fi
 # 辅助函数
 # ============================================================
 
-create_framework() {
+create_dynamic_framework() {
+    local name=$1
+    local dylib_path=$2
+    local headers_dir=$3
+    local output_dir=$4
+    
+    local framework_dir="$output_dir/${name}.framework"
+    rm -rf "$framework_dir"
+    mkdir -p "$framework_dir/Headers"
+    mkdir -p "$framework_dir/Modules"
+    
+    # 复制头文件
+    if [ -d "$headers_dir" ]; then
+        # 查找头文件可能的位置
+        if [ -d "$headers_dir/plist" ]; then
+            cp -r "$headers_dir/plist" "$framework_dir/Headers/" 2>/dev/null || true
+        else
+            cp -r "$headers_dir"/* "$framework_dir/Headers/" 2>/dev/null || true
+        fi
+    fi
+    
+    # 复制动态库
+    cp "$dylib_path" "$framework_dir/${name}"
+    
+    # 修改 install name
+    install_name_tool -id "@rpath/${name}.framework/${name}" "$framework_dir/${name}" 2>/dev/null || true
+    
+    # 创建 modulemap
+    cat > "$framework_dir/Modules/module.modulemap" << EOF
+framework module $name {
+    umbrella header "${name}.h"
+    export *
+}
+EOF
+    
+    # 创建 Info.plist
+    cat > "$framework_dir/Info.plist" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>${name}</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.permanentstore.${name}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>${name}</string>
+    <key>CFBundlePackageType</key>
+    <string>FMWK</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>MinimumOSVersion</key>
+    <string>12.0</string>
+</dict>
+</plist>
+EOF
+    
+    echo -e "${GREEN}  ✅ ${name}.framework (动态库)${NC}"
+}
+
+create_static_framework() {
     local name=$1
     local lib_path=$2
-    local headers=$3
+    local headers_dir=$3
     local output_dir=$4
     
     local framework_dir="$output_dir/${name}.framework"
     rm -rf "$framework_dir"
     mkdir -p "$framework_dir/Headers"
     
-    if [ -d "$headers" ]; then
-        cp -r "$headers"/* "$framework_dir/Headers/" 2>/dev/null || true
+    if [ -d "$headers_dir" ]; then
+        cp -r "$headers_dir"/* "$framework_dir/Headers/" 2>/dev/null || true
     fi
     
     cp "$lib_path" "$framework_dir/${name}"
@@ -90,7 +154,7 @@ create_framework() {
 </plist>
 EOF
     
-    echo -e "${GREEN}  ✅ ${name}.framework${NC}"
+    echo -e "${GREEN}  ✅ ${name}.framework (静态库)${NC}"
 }
 
 # 合并 entitlements 到 app
@@ -105,11 +169,10 @@ merge_entitlements() {
     
     local entitlements_dest="$app_path/entitlements.plist"
     
-    # 复制 entitlements 文件
     cp "$entitlements_file" "$entitlements_dest"
     echo -e "${GREEN}  ✅ 已合并 entitlements.plist${NC}"
     
-    # 可选：使用 ldid 签名（如果有 ldid）
+    # 使用 ldid 签名（如果有）
     local ldid_path="$FRAMEWORKS_OUTPUT/ldid.framework/ldid"
     if [ -f "$ldid_path" ]; then
         echo "  正在使用 ldid 签名..."
@@ -118,9 +181,9 @@ merge_entitlements() {
 }
 
 # ============================================================
-# 1. 编译 OpenSSL Framework
+# 1. 编译 OpenSSL Framework (动态库)
 # ============================================================
-echo -e "\n${YELLOW}📦 [1/5] 编译 OpenSSL Framework${NC}"
+echo -e "\n${YELLOW}📦 [1/5] 编译 OpenSSL Framework (动态库)${NC}"
 
 cd "$BUILD_TEMP"
 if [ ! -d "openssl_src" ]; then
@@ -128,17 +191,18 @@ if [ ! -d "openssl_src" ]; then
 fi
 cd openssl_src
 
-echo "  编译 arm64 (真机)..."
+echo "  编译 arm64 (真机) 动态库..."
 make clean 2>/dev/null || true
 make distclean 2>/dev/null || true
 
-export CROSS_TOP="$(xcrun --sdk iphoneos --show-sdk-platform-path)/Developer"
-export CROSS_SDK="iPhoneOS${SDK_VERSION}.sdk"
-
+# 配置 OpenSSL 动态库
 ./Configure ios64-cross \
     --prefix="$BUILD_TEMP/openssl_device" \
-    no-shared no-tests \
-    -isysroot "$DEVICE_SDK_PATH" -mios-version-min=12.0
+    --openssldir="$BUILD_TEMP/openssl_device/ssl" \
+    shared \
+    no-tests \
+    -isysroot "$DEVICE_SDK_PATH" \
+    -mios-version-min=12.0
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ OpenSSL Configure 失败${NC}"
@@ -155,30 +219,29 @@ make install_sw
 
 cd ..
 
-# 验证库文件是否存在
-if [ ! -f "$BUILD_TEMP/openssl_device/lib/libcrypto.a" ]; then
-    echo -e "${RED}❌ 库文件不存在: libcrypto.a${NC}"
-    exit 1
-fi
-
-# 创建 Framework
+# 创建动态 Framework
 for libname in crypto ssl; do
-    create_framework \
-        "$libname" \
-        "$BUILD_TEMP/openssl_device/lib/lib${libname}.a" \
-        "$BUILD_TEMP/openssl_device/include" \
-        "$FRAMEWORKS_OUTPUT"
+    dylib_path="$BUILD_TEMP/openssl_device/lib/lib${libname}.dylib"
+    if [ -f "$dylib_path" ]; then
+        create_dynamic_framework \
+            "$libname" \
+            "$dylib_path" \
+            "$BUILD_TEMP/openssl_device/include" \
+            "$FRAMEWORKS_OUTPUT"
+    else
+        echo -e "${RED}❌ 找不到 lib${libname}.dylib${NC}"
+        exit 1
+    fi
 done
 
-echo -e "${GREEN}✅ OpenSSL 编译完成${NC}"
+echo -e "${GREEN}✅ OpenSSL 动态库编译完成${NC}"
 
 # ============================================================
-# 2. 编译 libplist Framework
+# 2. 编译 libplist Framework (动态库)
 # ============================================================
-echo -e "\n${YELLOW}📦 [2/5] 编译 libplist Framework${NC}"
+echo -e "\n${YELLOW}📦 [2/5] 编译 libplist Framework (动态库)${NC}"
 
 # 安装 autotools 工具
-echo "  检查并安装 autotools 工具..."
 if ! command -v libtoolize &> /dev/null; then
     brew install autoconf automake libtool
 fi
@@ -195,27 +258,54 @@ if [ ! -f "./configure" ]; then
     ./autogen.sh
 fi
 
-echo "  编译 arm64 (真机)..."
+echo "  编译 arm64 (真机) 动态库..."
 make clean 2>/dev/null || true
 make distclean 2>/dev/null || true
+
+# 配置 libplist 动态库（关键修改）
 export CC="xcrun -sdk iphoneos clang -arch arm64"
 export CFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=12.0"
-./configure --prefix="$BUILD_TEMP/libplist_device" --disable-shared --enable-static --host=arm64-apple-darwin
+export LDFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=12.0"
+
+./configure \
+    --prefix="$BUILD_TEMP/libplist_device" \
+    --enable-shared \
+    --disable-static \
+    --disable-tests \
+    --host=arm64-apple-darwin
+
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ libplist Configure 失败${NC}"
+    exit 1
+fi
+
 make -j$(sysctl -n hw.ncpu)
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ libplist Make 失败${NC}"
+    exit 1
+fi
+
 make install
 
 cd ..
 
-create_framework \
-    "plist" \
-    "$BUILD_TEMP/libplist_device/lib/libplist.a" \
-    "$BUILD_TEMP/libplist_device/include" \
-    "$FRAMEWORKS_OUTPUT"
+# 创建动态 Framework
+dylib_path="$BUILD_TEMP/libplist_device/lib/libplist-2.0.dylib"
+if [ -f "$dylib_path" ]; then
+    create_dynamic_framework \
+        "plist" \
+        "$dylib_path" \
+        "$BUILD_TEMP/libplist_device/include" \
+        "$FRAMEWORKS_OUTPUT"
+else
+    echo -e "${RED}❌ 找不到 libplist-2.0.dylib${NC}"
+    exit 1
+fi
 
-echo -e "${GREEN}✅ libplist 编译完成${NC}"
+echo -e "${GREEN}✅ libplist 动态库编译完成${NC}"
 
 # ============================================================
-# 3. 编译 ldid Framework
+# 3. 编译 ldid (静态可执行文件，放入 Framework)
 # ============================================================
 echo -e "\n${YELLOW}📦 [3/5] 编译 ldid Framework${NC}"
 
@@ -229,11 +319,14 @@ OPENSSL_DEVICE="$BUILD_TEMP/openssl_device"
 
 echo "  编译 arm64 (真机)..."
 make -f Makefile clean 2>/dev/null || true
+
 export CC="xcrun -sdk iphoneos clang -arch arm64"
 export CXX="xcrun -sdk iphoneos clang++ -arch arm64"
 export CFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=12.0 -I$OPENSSL_DEVICE/include"
-export LDFLAGS="-L$OPENSSL_DEVICE/lib"
+export LDFLAGS="-L$OPENSSL_DEVICE/lib -lcrypto"
+
 make -j$(sysctl -n hw.ncpu) -f Makefile
+
 mkdir -p "$BUILD_TEMP/ldid_device"
 cp ldid "$BUILD_TEMP/ldid_device/" 2>/dev/null || true
 
@@ -251,7 +344,8 @@ cat > "$BUILD_TEMP/ldid_headers/ldid.h" << 'EOF'
 #endif
 EOF
 
-create_framework \
+# ldid 是可执行文件，使用静态 Framework 包装
+create_static_framework \
     "ldid" \
     "$BUILD_TEMP/ldid_device/ldid" \
     "$BUILD_TEMP/ldid_headers" \
@@ -260,7 +354,7 @@ create_framework \
 echo -e "${GREEN}✅ ldid 编译完成${NC}"
 
 # ============================================================
-# 4. 编译 zsign Framework
+# 4. 编译 zsign (静态可执行文件，放入 Framework)
 # ============================================================
 echo -e "\n${YELLOW}📦 [4/5] 编译 zsign Framework${NC}"
 
@@ -274,11 +368,14 @@ OPENSSL_DEVICE="$BUILD_TEMP/openssl_device"
 
 echo "  编译 arm64 (真机)..."
 make clean 2>/dev/null || true
+
 export CC="xcrun -sdk iphoneos clang -arch arm64"
 export CXX="xcrun -sdk iphoneos clang++ -arch arm64"
 export CFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=12.0 -I$OPENSSL_DEVICE/include"
 export LDFLAGS="-L$OPENSSL_DEVICE/lib -lcrypto -lssl"
+
 make -j$(sysctl -n hw.ncpu)
+
 mkdir -p "$BUILD_TEMP/zsign_device"
 cp zsign "$BUILD_TEMP/zsign_device/" 2>/dev/null || true
 
@@ -304,7 +401,8 @@ int zsign_sign_ipa(const char* ipa_path, const char* p12_path, const char* passw
 #endif
 EOF
 
-create_framework \
+# zsign 是可执行文件，使用静态 Framework 包装
+create_static_framework \
     "zsign" \
     "$BUILD_TEMP/zsign_device/zsign" \
     "$BUILD_TEMP/zsign_headers" \
@@ -398,24 +496,19 @@ xcodebuild -exportArchive \
 # 查找生成的 IPA
 IPA_FILE=$(find "$IPA_OUTPUT" -name "*.ipa" | head -1)
 if [ -n "$IPA_FILE" ] && [ -f "$IPA_FILE" ]; then
-    # 重命名带版本号
     FINAL_IPA="$IPA_OUTPUT/PermanentStore_${VERSION}_${BUILD}.ipa"
     mv "$IPA_FILE" "$FINAL_IPA" 2>/dev/null || true
     
     # 如果 entitlements 存在，尝试注入到 IPA 中
     if [ -f "$ENTITLEMENTS_FILE" ]; then
         echo "  将 entitlements 注入到 IPA..."
-        # 解压 IPA
         TEMP_IPA_EXTRACT="$BUILD_TEMP/ipa_extract"
         rm -rf "$TEMP_IPA_EXTRACT"
         mkdir -p "$TEMP_IPA_EXTRACT"
         unzip -q "$FINAL_IPA" -d "$TEMP_IPA_EXTRACT"
         
-        # 复制 entitlements
         if [ -d "$TEMP_IPA_EXTRACT/Payload/PermanentStore.app" ]; then
             cp "$ENTITLEMENTS_FILE" "$TEMP_IPA_EXTRACT/Payload/PermanentStore.app/entitlements.plist"
-            
-            # 重新打包
             cd "$TEMP_IPA_EXTRACT"
             zip -qr "$FINAL_IPA" .
             cd - > /dev/null
