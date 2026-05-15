@@ -13,7 +13,7 @@ jobs:
       - name: 安装 Python 依赖
         run: pip3 install --break-system-packages cryptography
       - name: 运行证书生成脚本
-        run: python3 make_cert.py "0000000000" "./cert_output" "troll"
+        run: python3 make_cert.py "0000000000" "./cert_output" "1"
       - name: 上传证书文件
         uses: actions/upload-artifact@v4
         with:
