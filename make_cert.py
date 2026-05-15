@@ -32,25 +32,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ============================================================
 # OID 定义
 # ============================================================
-OID_LIST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14]
+OID_LIST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 OID_DER = [ObjectIdentifier(f"1.2.840.113635.100.6.1.{i}") for i in OID_LIST]
 OID_WWDR      = ObjectIdentifier("1.2.840.113635.100.6.2.1")
-OID_DEV_CA    = ObjectIdentifier("1.2.840.113635.100.6.2.6")
-OID_CERT_TYPE = ObjectIdentifier("1.2.840.113635.100.6.2.18")
 OID_INTEG     = ObjectIdentifier("1.2.840.113635.100.6.3.1")
 OID_SEC_BOOT  = ObjectIdentifier("1.2.840.113635.100.6.3.2")
 OID_POLICY    = ObjectIdentifier("1.2.840.113635.100.5.1")
-
-# ============================================================
-# Cert Type 扩展的值：OCTET STRING 包含 UTF8String
-# ============================================================
-def build_cert_type_der(type_name="Apple Development"):
-    utf8_bytes = type_name.encode("utf-8")
-    utf8_der = b'\x0C' + len(utf8_bytes).to_bytes(1, 'big') + utf8_bytes
-    octet_der = b'\x04' + len(utf8_der).to_bytes(1, 'big') + utf8_der
-    return octet_der
-
-CERT_TYPE_DER = build_cert_type_der("Apple Development")
 
 def gen_key():
     return rsa.generate_private_key(65537, 2048, default_backend())
@@ -128,7 +115,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     )
     builder = builder.add_extension(aki, critical=False)
 
-    # CRL 分发点 — 新版 cryptography 需要 relative_name 参数
     crl_dp = CRLDistributionPoints([
         DistributionPoint(
             full_name=[UniformResourceIdentifier("http://crl.apple.com/root.crl")],
@@ -156,12 +142,6 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
     if leaf:
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_WWDR, b'\x05\x00'), critical=False
-        )
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_DEV_CA, b'\x05\x00'), critical=False
-        )
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_CERT_TYPE, CERT_TYPE_DER), critical=False
         )
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_INTEG, b'\x05\x00'), critical=False
@@ -297,6 +277,84 @@ mobileconfig = f'''<?xml version="1.0" encoding="UTF-8"?>
 with open(f"{OUTPUT_DIR}/cert.mobileconfig", "w") as f:
     f.write(mobileconfig)
 print("✅ mobileconfig")
+
+# ============================================================
+print(">>> 完整证书链 TXT...")
+def cert_to_detail_text(cert, title):
+    lines = []
+    lines.append("=" * 60)
+    lines.append(f"  {title}")
+    lines.append("=" * 60)
+    lines.append(f"  Subject      : {cert.subject.rfc4514_string()}")
+    lines.append(f"  Issuer       : {cert.issuer.rfc4514_string()}")
+    lines.append(f"  Serial       : {cert.serial_number}")
+    lines.append(f"  Not Before   : {cert.not_valid_before_utc}")
+    lines.append(f"  Not After    : {cert.not_valid_after_utc}")
+    lines.append(f"  Fingerprint (SHA-1): {cert.fingerprint(hashes.SHA1()).hex(':') }")
+    lines.append(f"  Fingerprint (SHA-256): {cert.fingerprint(hashes.SHA256()).hex(':')}")
+    lines.append(f"  Public Key   : {cert.public_key().__class__.__name__}")
+    lines.append("-" * 40)
+    lines.append("  Extensions:")
+    for ext in cert.extensions:
+        oid_str = ext.oid.dotted_string
+        critical_str = " (critical)" if ext.critical else ""
+        try:
+            val = ext.value
+            # 尝试获取更友好的表示
+            if hasattr(val, 'rfc4514_string'):
+                val_repr = val.rfc4514_string()
+            elif hasattr(val, 'public_bytes'):
+                val_repr = val.public_bytes().hex()
+            else:
+                val_repr = str(val)
+        except Exception:
+            val_repr = "<unable to display>"
+        # 截断过长的值
+        if len(val_repr) > 120:
+            val_repr = val_repr[:117] + "..."
+        lines.append(f"    {oid_str}{critical_str}")
+        lines.append(f"      Value: {val_repr}")
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+chain_text = []
+chain_text.append(cert_to_detail_text(root_cert, "Apple Root CA (Self-Signed)"))
+chain_text.append("")
+chain_text.append(cert_to_detail_text(codeca_cert, "Apple iPhone Certification Authority"))
+chain_text.append("")
+chain_text.append(cert_to_detail_text(dev_cert, "Apple Development (Leaf)"))
+chain_text.append("")
+chain_text.append("=" * 60)
+chain_text.append("  Certificate Chain Verification")
+chain_text.append("=" * 60)
+# 基本验证
+try:
+    # 验证中间 CA 由根签发
+    root_key.public_key().verify(
+        codeca_cert.signature,
+        codeca_cert.tbs_certificate_bytes,
+        codeca_cert.signature_algorithm_parameters or x509.PSS(mgf=x509.MGF1(hashes.SHA256()), salt_length=x509.PSS.DIGEST_LENGTH) if isinstance(codeca_cert.signature_hash_algorithm, type(None)) else x509.PSS(mgf=x509.MGF1(codeca_cert.signature_hash_algorithm), salt_length=x509.PSS.DIGEST_LENGTH) if hasattr(codeca_cert, 'signature_algorithm_parameters') and codeca_cert.signature_algorithm_parameters is not None else None
+    )
+    chain_text.append("  ✅ Root -> Intermediate: Signature Valid")
+except Exception as e:
+    chain_text.append(f"  ❌ Root -> Intermediate: {e}")
+
+try:
+    codeca_key.public_key().verify(
+        dev_cert.signature,
+        dev_cert.tbs_certificate_bytes,
+        dev_cert.signature_algorithm_parameters or x509.PSS(mgf=x509.MGF1(hashes.SHA256()), salt_length=x509.PSS.DIGEST_LENGTH) if isinstance(dev_cert.signature_hash_algorithm, type(None)) else x509.PSS(mgf=x509.MGF1(dev_cert.signature_hash_algorithm), salt_length=x509.PSS.DIGEST_LENGTH) if hasattr(dev_cert, 'signature_algorithm_parameters') and dev_cert.signature_algorithm_parameters is not None else None
+    )
+    chain_text.append("  ✅ Intermediate -> Leaf: Signature Valid")
+except Exception as e:
+    chain_text.append(f"  ❌ Intermediate -> Leaf: {e}")
+
+chain_text.append("=" * 60)
+
+full_chain_text = "\n".join(chain_text)
+with open(f"{OUTPUT_DIR}/certificate_chain.txt", "w") as f:
+    f.write(full_chain_text)
+print("✅ certificate_chain.txt")
 
 # ============================================================
 print(">>> 打包...")
