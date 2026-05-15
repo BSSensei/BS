@@ -183,10 +183,10 @@ cd openssl_src
 # 编译 arm64（真机）
 echo "  编译 arm64 (真机)..."
 make clean 2>/dev/null || true
+make distclean 2>/dev/null || true
 
 export CROSS_TOP="$(xcrun --sdk iphoneos --show-sdk-platform-path)/Developer"
 export CROSS_SDK="iPhoneOS${SDK_VERSION}.sdk"
-export CC="xcrun -sdk iphoneos clang -arch arm64"
 
 ./Configure ios64-cross \
     --prefix="$BUILD_TEMP/openssl_device" \
@@ -205,15 +205,14 @@ if [ $? -ne 0 ]; then
 fi
 
 make install_sw
-make clean
+make distclean
 
 # 编译 x86_64（模拟器）
 echo "  编译 x86_64 (模拟器)..."
 export CROSS_TOP="$(xcrun --sdk iphonesimulator --show-sdk-platform-path)/Developer"
 export CROSS_SDK="iPhoneSimulator${SDK_VERSION}.sdk"
-export CC="xcrun -sdk iphonesimulator clang -arch x86_64"
 
-# 修复：使用正确的 Configure 语法
+# 使用正确的模拟器目标
 ./Configure iossimulator-x86_64 \
     --prefix="$BUILD_TEMP/openssl_simulator" \
     no-shared no-tests
@@ -223,8 +222,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 修改 Makefile，添加编译参数
-perl -pi -e 's|CC=.*|CC=xcrun -sdk iphonesimulator clang -arch x86_64 -isysroot '"$SIMULATOR_SDK_PATH"' -mios-version-min=12.0|g' Makefile
+# 修复 Makefile 中的编译器设置
+perl -pi -e 's|^CC=.*|CC=xcrun -sdk iphonesimulator clang -arch x86_64|' Makefile
+perl -pi -e 's|^CFLAGS=.*|CFLAGS=-isysroot '"$SIMULATOR_SDK_PATH"' -mios-version-min=12.0 -O3 -D_REENTRANT|' Makefile
 
 make -j$(sysctl -n hw.ncpu)
 if [ $? -ne 0 ]; then
@@ -235,6 +235,17 @@ fi
 make install_sw
 
 cd ..
+
+# 验证库文件是否存在
+if [ ! -f "$BUILD_TEMP/openssl_device/lib/libcrypto.a" ]; then
+    echo -e "${RED}❌ 设备库文件不存在: libcrypto.a${NC}"
+    exit 1
+fi
+
+if [ ! -f "$BUILD_TEMP/openssl_simulator/lib/libcrypto.a" ]; then
+    echo -e "${RED}❌ 模拟器库文件不存在: libcrypto.a${NC}"
+    exit 1
+fi
 
 for libname in crypto ssl; do
     create_xcframework \
@@ -273,6 +284,7 @@ fi
 # 编译 arm64（真机）
 echo "  编译 arm64 (真机)..."
 make clean 2>/dev/null || true
+make distclean 2>/dev/null || true
 export CC="xcrun -sdk iphoneos clang -arch arm64"
 export CFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=12.0"
 ./configure --prefix="$BUILD_TEMP/libplist_device" --disable-shared --enable-static --host=arm64-apple-darwin
