@@ -28,7 +28,6 @@ ENTITLEMENTS_FILE="$ROOT_DIR/entitlements.plist"
 mkdir -p "$BUILD_TEMP" "$FRAMEWORKS_OUTPUT" "$IPA_OUTPUT"
 
 DEVICE_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-SIMULATOR_SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
 SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
 
 if [ -z "$DEVICE_SDK_PATH" ]; then
@@ -40,7 +39,6 @@ echo -e "${BLUE}============================================================${NC
 echo -e "${BLUE}  PermanentStore 完整构建脚本${NC}"
 echo -e "${BLUE}============================================================${NC}"
 echo -e "📱 设备 SDK: $DEVICE_SDK_PATH"
-echo -e "🖥️ 模拟器 SDK: $SIMULATOR_SDK_PATH"
 echo -e "📦 Framework 输出: $FRAMEWORKS_OUTPUT"
 echo -e "📱 IPA 输出: $IPA_OUTPUT"
 if [ -f "$ENTITLEMENTS_FILE" ]; then
@@ -53,31 +51,23 @@ fi
 # 辅助函数
 # ============================================================
 
-create_xcframework() {
+create_framework() {
     local name=$1
-    local device_lib=$2
-    local sim_lib=$3
-    local headers=$4
-    local output_dir=$5
+    local lib_path=$2
+    local headers=$3
+    local output_dir=$4
     
-    local xcframework_dir="$output_dir/${name}.xcframework"
-    rm -rf "$xcframework_dir"
+    local framework_dir="$output_dir/${name}.framework"
+    rm -rf "$framework_dir"
+    mkdir -p "$framework_dir/Headers"
     
-    local frameworks=()
+    if [ -d "$headers" ]; then
+        cp -r "$headers"/* "$framework_dir/Headers/" 2>/dev/null || true
+    fi
     
-    # iOS 设备 Framework
-    if [ -f "$device_lib" ]; then
-        local device_framework="$BUILD_TEMP/${name}_ios.framework"
-        rm -rf "$device_framework"
-        mkdir -p "$device_framework/Headers"
-        
-        if [ -d "$headers" ]; then
-            cp -r "$headers"/* "$device_framework/Headers/" 2>/dev/null || true
-        fi
-        
-        cp "$device_lib" "$device_framework/${name}"
-        
-        cat > "$device_framework/Info.plist" << EOF
+    cp "$lib_path" "$framework_dir/${name}"
+    
+    cat > "$framework_dir/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -99,50 +89,8 @@ create_xcframework() {
 </dict>
 </plist>
 EOF
-        frameworks+=(-framework "$device_framework")
-    fi
     
-    # 模拟器 Framework
-    if [ -f "$sim_lib" ]; then
-        local sim_framework="$BUILD_TEMP/${name}_sim.framework"
-        rm -rf "$sim_framework"
-        mkdir -p "$sim_framework/Headers"
-        
-        if [ -d "$headers" ]; then
-            cp -r "$headers"/* "$sim_framework/Headers/" 2>/dev/null || true
-        fi
-        
-        cp "$sim_lib" "$sim_framework/${name}"
-        
-        cat > "$sim_framework/Info.plist" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>${name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.permanentstore.${name}</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>${name}</string>
-    <key>CFBundlePackageType</key>
-    <string>FMWK</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-</dict>
-</plist>
-EOF
-        frameworks+=(-framework "$sim_framework")
-    fi
-    
-    if [ ${#frameworks[@]} -gt 0 ]; then
-        xcodebuild -create-xcframework "${frameworks[@]}" -output "$xcframework_dir"
-        echo -e "${GREEN}  ✅ $name.xcframework${NC}"
-    fi
+    echo -e "${GREEN}  ✅ ${name}.framework${NC}"
 }
 
 # 合并 entitlements 到 app
@@ -161,8 +109,8 @@ merge_entitlements() {
     cp "$entitlements_file" "$entitlements_dest"
     echo -e "${GREEN}  ✅ 已合并 entitlements.plist${NC}"
     
-    # 可选：使用 ldid 签名（如果有 ldid framework）
-    local ldid_path="$FRAMEWORKS_OUTPUT/ldid.xcframework/ios-arm64/ldid"
+    # 可选：使用 ldid 签名（如果有 ldid）
+    local ldid_path="$FRAMEWORKS_OUTPUT/ldid.framework/ldid"
     if [ -f "$ldid_path" ]; then
         echo "  正在使用 ldid 签名..."
         "$ldid_path" -S"$entitlements_dest" "$app_path/PermanentStore" 2>/dev/null || true
@@ -172,7 +120,7 @@ merge_entitlements() {
 # ============================================================
 # 1. 编译 OpenSSL Framework
 # ============================================================
-echo -e "\n${YELLOW}📦 [1/5] 编译 OpenSSL XCFramework${NC}"
+echo -e "\n${YELLOW}📦 [1/5] 编译 OpenSSL Framework${NC}"
 
 cd "$BUILD_TEMP"
 if [ ! -d "openssl_src" ]; then
@@ -180,7 +128,6 @@ if [ ! -d "openssl_src" ]; then
 fi
 cd openssl_src
 
-# 编译 arm64（真机）
 echo "  编译 arm64 (真机)..."
 make clean 2>/dev/null || true
 make distclean 2>/dev/null || true
@@ -194,41 +141,13 @@ export CROSS_SDK="iPhoneOS${SDK_VERSION}.sdk"
     -isysroot "$DEVICE_SDK_PATH" -mios-version-min=12.0
 
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ OpenSSL Configure 失败 (arm64)${NC}"
+    echo -e "${RED}❌ OpenSSL Configure 失败${NC}"
     exit 1
 fi
 
 make -j$(sysctl -n hw.ncpu)
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ OpenSSL Make 失败 (arm64)${NC}"
-    exit 1
-fi
-
-make install_sw
-make distclean
-
-# 编译 x86_64（模拟器）
-echo "  编译 x86_64 (模拟器)..."
-export CROSS_TOP="$(xcrun --sdk iphonesimulator --show-sdk-platform-path)/Developer"
-export CROSS_SDK="iPhoneSimulator${SDK_VERSION}.sdk"
-
-# 使用正确的模拟器目标
-./Configure iossimulator-x86_64 \
-    --prefix="$BUILD_TEMP/openssl_simulator" \
-    no-shared no-tests
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ OpenSSL Configure 失败 (x86_64)${NC}"
-    exit 1
-fi
-
-# 修复 Makefile 中的编译器设置
-perl -pi -e 's|^CC=.*|CC=xcrun -sdk iphonesimulator clang -arch x86_64|' Makefile
-perl -pi -e 's|^CFLAGS=.*|CFLAGS=-isysroot '"$SIMULATOR_SDK_PATH"' -mios-version-min=12.0 -O3 -D_REENTRANT|' Makefile
-
-make -j$(sysctl -n hw.ncpu)
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ OpenSSL Make 失败 (x86_64)${NC}"
+    echo -e "${RED}❌ OpenSSL Make 失败${NC}"
     exit 1
 fi
 
@@ -238,20 +157,15 @@ cd ..
 
 # 验证库文件是否存在
 if [ ! -f "$BUILD_TEMP/openssl_device/lib/libcrypto.a" ]; then
-    echo -e "${RED}❌ 设备库文件不存在: libcrypto.a${NC}"
+    echo -e "${RED}❌ 库文件不存在: libcrypto.a${NC}"
     exit 1
 fi
 
-if [ ! -f "$BUILD_TEMP/openssl_simulator/lib/libcrypto.a" ]; then
-    echo -e "${RED}❌ 模拟器库文件不存在: libcrypto.a${NC}"
-    exit 1
-fi
-
+# 创建 Framework
 for libname in crypto ssl; do
-    create_xcframework \
+    create_framework \
         "$libname" \
         "$BUILD_TEMP/openssl_device/lib/lib${libname}.a" \
-        "$BUILD_TEMP/openssl_simulator/lib/lib${libname}.a" \
         "$BUILD_TEMP/openssl_device/include" \
         "$FRAMEWORKS_OUTPUT"
 done
@@ -261,7 +175,7 @@ echo -e "${GREEN}✅ OpenSSL 编译完成${NC}"
 # ============================================================
 # 2. 编译 libplist Framework
 # ============================================================
-echo -e "\n${YELLOW}📦 [2/5] 编译 libplist XCFramework${NC}"
+echo -e "\n${YELLOW}📦 [2/5] 编译 libplist Framework${NC}"
 
 # 安装 autotools 工具
 echo "  检查并安装 autotools 工具..."
@@ -281,7 +195,6 @@ if [ ! -f "./configure" ]; then
     ./autogen.sh
 fi
 
-# 编译 arm64（真机）
 echo "  编译 arm64 (真机)..."
 make clean 2>/dev/null || true
 make distclean 2>/dev/null || true
@@ -290,22 +203,12 @@ export CFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=12.0"
 ./configure --prefix="$BUILD_TEMP/libplist_device" --disable-shared --enable-static --host=arm64-apple-darwin
 make -j$(sysctl -n hw.ncpu)
 make install
-make distclean
-
-# 编译 x86_64（模拟器）
-echo "  编译 x86_64 (模拟器)..."
-export CC="xcrun -sdk iphonesimulator clang -arch x86_64"
-export CFLAGS="-arch x86_64 -isysroot $SIMULATOR_SDK_PATH -mios-version-min=12.0"
-./configure --prefix="$BUILD_TEMP/libplist_simulator" --disable-shared --enable-static --host=x86_64-apple-darwin
-make -j$(sysctl -n hw.ncpu)
-make install
 
 cd ..
 
-create_xcframework \
+create_framework \
     "plist" \
     "$BUILD_TEMP/libplist_device/lib/libplist.a" \
-    "$BUILD_TEMP/libplist_simulator/lib/libplist.a" \
     "$BUILD_TEMP/libplist_device/include" \
     "$FRAMEWORKS_OUTPUT"
 
@@ -314,7 +217,7 @@ echo -e "${GREEN}✅ libplist 编译完成${NC}"
 # ============================================================
 # 3. 编译 ldid Framework
 # ============================================================
-echo -e "\n${YELLOW}📦 [3/5] 编译 ldid XCFramework${NC}"
+echo -e "\n${YELLOW}📦 [3/5] 编译 ldid Framework${NC}"
 
 cd "$BUILD_TEMP"
 if [ ! -d "ldid_src" ]; then
@@ -323,9 +226,7 @@ fi
 cd ldid_src
 
 OPENSSL_DEVICE="$BUILD_TEMP/openssl_device"
-OPENSSL_SIM="$BUILD_TEMP/openssl_simulator"
 
-# 编译 arm64
 echo "  编译 arm64 (真机)..."
 make -f Makefile clean 2>/dev/null || true
 export CC="xcrun -sdk iphoneos clang -arch arm64"
@@ -335,17 +236,6 @@ export LDFLAGS="-L$OPENSSL_DEVICE/lib"
 make -j$(sysctl -n hw.ncpu) -f Makefile
 mkdir -p "$BUILD_TEMP/ldid_device"
 cp ldid "$BUILD_TEMP/ldid_device/" 2>/dev/null || true
-make -f Makefile clean 2>/dev/null || true
-
-# 编译 x86_64
-echo "  编译 x86_64 (模拟器)..."
-export CC="xcrun -sdk iphonesimulator clang -arch x86_64"
-export CXX="xcrun -sdk iphonesimulator clang++ -arch x86_64"
-export CFLAGS="-arch x86_64 -isysroot $SIMULATOR_SDK_PATH -mios-version-min=12.0 -I$OPENSSL_SIM/include"
-export LDFLAGS="-L$OPENSSL_SIM/lib"
-make -j$(sysctl -n hw.ncpu) -f Makefile
-mkdir -p "$BUILD_TEMP/ldid_simulator"
-cp ldid "$BUILD_TEMP/ldid_simulator/" 2>/dev/null || true
 
 cd ..
 
@@ -361,10 +251,9 @@ cat > "$BUILD_TEMP/ldid_headers/ldid.h" << 'EOF'
 #endif
 EOF
 
-create_xcframework \
+create_framework \
     "ldid" \
     "$BUILD_TEMP/ldid_device/ldid" \
-    "$BUILD_TEMP/ldid_simulator/ldid" \
     "$BUILD_TEMP/ldid_headers" \
     "$FRAMEWORKS_OUTPUT"
 
@@ -373,7 +262,7 @@ echo -e "${GREEN}✅ ldid 编译完成${NC}"
 # ============================================================
 # 4. 编译 zsign Framework
 # ============================================================
-echo -e "\n${YELLOW}📦 [4/5] 编译 zsign XCFramework${NC}"
+echo -e "\n${YELLOW}📦 [4/5] 编译 zsign Framework${NC}"
 
 cd "$BUILD_TEMP"
 if [ ! -d "zsign_src" ]; then
@@ -381,7 +270,8 @@ if [ ! -d "zsign_src" ]; then
 fi
 cd zsign_src
 
-# 编译 arm64
+OPENSSL_DEVICE="$BUILD_TEMP/openssl_device"
+
 echo "  编译 arm64 (真机)..."
 make clean 2>/dev/null || true
 export CC="xcrun -sdk iphoneos clang -arch arm64"
@@ -391,17 +281,6 @@ export LDFLAGS="-L$OPENSSL_DEVICE/lib -lcrypto -lssl"
 make -j$(sysctl -n hw.ncpu)
 mkdir -p "$BUILD_TEMP/zsign_device"
 cp zsign "$BUILD_TEMP/zsign_device/" 2>/dev/null || true
-make clean 2>/dev/null || true
-
-# 编译 x86_64
-echo "  编译 x86_64 (模拟器)..."
-export CC="xcrun -sdk iphonesimulator clang -arch x86_64"
-export CXX="xcrun -sdk iphonesimulator clang++ -arch x86_64"
-export CFLAGS="-arch x86_64 -isysroot $SIMULATOR_SDK_PATH -mios-version-min=12.0 -I$OPENSSL_SIM/include"
-export LDFLAGS="-L$OPENSSL_SIM/lib -lcrypto -lssl"
-make -j$(sysctl -n hw.ncpu)
-mkdir -p "$BUILD_TEMP/zsign_simulator"
-cp zsign "$BUILD_TEMP/zsign_simulator/" 2>/dev/null || true
 
 cd ..
 
@@ -425,10 +304,9 @@ int zsign_sign_ipa(const char* ipa_path, const char* p12_path, const char* passw
 #endif
 EOF
 
-create_xcframework \
+create_framework \
     "zsign" \
     "$BUILD_TEMP/zsign_device/zsign" \
-    "$BUILD_TEMP/zsign_simulator/zsign" \
     "$BUILD_TEMP/zsign_headers" \
     "$FRAMEWORKS_OUTPUT"
 
