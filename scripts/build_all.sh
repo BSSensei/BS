@@ -233,7 +233,7 @@ create_framework_header "$PLIST_FRAMEWORK" "PLIST"
 echo -e "${GREEN}  ✅ PLIST.framework${NC}"
 
 # ============================================================
-# 3. 编译 ldid 并打包为 Framework
+# 3. 编译 ldid Framework
 # ============================================================
 echo -e "\n${YELLOW}📦 [3/4] 编译 ldid.framework${NC}"
 
@@ -243,9 +243,21 @@ if [ ! -d "ldid_src" ]; then
 fi
 
 cd ldid_src
-make clean 2>/dev/null || true
 
-echo "  编译 ldid..."
+# 修复 OpenSSL const 问题
+if ! grep -q "const_cast" ldid.cpp; then
+    echo "  应用 ldid OpenSSL 兼容性补丁..."
+    sed -i '' 's/X509_NAME_get_entry(nm, lastpos)/const_cast<X509_NAME_ENTRY*>(X509_NAME_get_entry(nm, lastpos))/g' ldid.cpp
+    sed -i '' 's/X509_NAME_ENTRY_get_data(e)/const_cast<ASN1_STRING*>(X509_NAME_ENTRY_get_data(e))/g' ldid.cpp
+    sed -i '' 's/X509_get_subject_name(x)/const_cast<X509_NAME*>(X509_get_subject_name(x))/g' ldid.cpp
+fi
+
+# 定义版本宏
+VERSION="2.1.5"
+
+echo "  编译 ldid（忽略签名相关代码）..."
+
+# 编译 ldid.o
 if ! xcrun -sdk iphoneos clang++ \
     -arch arm64 \
     -std=c++17 \
@@ -253,11 +265,27 @@ if ! xcrun -sdk iphoneos clang++ \
     -mios-version-min="${MIN_IOS_VERSION}" \
     -I"$BUILD_TEMP/openssl_install/include" \
     -I"$BUILD_TEMP/libplist_install/include" \
+    -D_GNU_SOURCE \
+    -DLDID_VERSION="\"$VERSION\"" \
+    -Wno-deprecated-declarations \
+    -Wno-unused-variable \
+    -Wno-unused-function \
+    -Wno-incompatible-pointer-types-discards-qualifiers \
+    -c ldid.cpp -o ldid.o; then
+    echo -e "${RED}  ❌ ldid 编译失败${NC}"
+    exit 1
+fi
+
+# 链接
+if ! xcrun -sdk iphoneos clang++ \
+    -arch arm64 \
+    -isysroot "$DEVICE_SDK_PATH" \
+    -mios-version-min="${MIN_IOS_VERSION}" \
     -L"$BUILD_TEMP/openssl_install/lib" \
     -L"$BUILD_TEMP/libplist_install/lib" \
     -lcrypto -lplist-2.0 \
-    -o ldid ldid.cpp; then
-    echo -e "${RED}  ❌ ldid 编译失败${NC}"
+    -o ldid ldid.o; then
+    echo -e "${RED}  ❌ ldid 链接失败${NC}"
     exit 1
 fi
 
@@ -270,6 +298,7 @@ create_framework_structure "$LDID_FRAMEWORK" "ldid"
 cp "ldid_src/ldid" "$LDID_FRAMEWORK/ldid"
 chmod +x "$LDID_FRAMEWORK/ldid"
 
+# 添加简单的头文件
 cat > "$LDID_FRAMEWORK/Headers/ldid.h" << 'EOF'
 #ifndef ldid_h
 #define ldid_h
@@ -289,7 +318,7 @@ create_framework_header "$LDID_FRAMEWORK" "ldid"
 echo -e "${GREEN}  ✅ ldid.framework${NC}"
 
 # ============================================================
-# 4. 编译 zsign 并打包为 Framework
+# 4. 编译 zsign Framework
 # ============================================================
 echo -e "\n${YELLOW}📦 [4/4] 编译 zsign.framework${NC}"
 
@@ -299,9 +328,9 @@ if [ ! -d "zsign_src" ]; then
 fi
 
 cd zsign_src
-make clean 2>/dev/null || true
 
-SOURCES=$(find . -maxdepth 1 -name "*.cpp" 2>/dev/null | tr '\n' ' ')
+# 收集所有 .cpp 源文件（排除测试文件）
+SOURCES=$(find . -maxdepth 1 -name "*.cpp" ! -name "*test*" 2>/dev/null | tr '\n' ' ')
 
 if [ -z "$SOURCES" ]; then
     echo -e "${RED}  ❌ 未找到源文件${NC}"
@@ -309,7 +338,6 @@ if [ -z "$SOURCES" ]; then
 fi
 
 echo "  编译 zsign..."
-
 OBJECTS=""
 for src in $SOURCES; do
     obj=$(basename "$src" .cpp).o
@@ -318,6 +346,7 @@ for src in $SOURCES; do
         -isysroot "$DEVICE_SDK_PATH" \
         -mios-version-min="${MIN_IOS_VERSION}" \
         -I"$BUILD_TEMP/openssl_install/include" \
+        -I. \
         -c "$src" -o "$obj"; then
         echo -e "${RED}  ❌ 编译 $src 失败${NC}"
         exit 1
@@ -344,6 +373,7 @@ create_framework_structure "$ZSIGN_FRAMEWORK" "zsign"
 cp "zsign_src/zsign" "$ZSIGN_FRAMEWORK/zsign"
 chmod +x "$ZSIGN_FRAMEWORK/zsign"
 
+# 添加头文件
 cat > "$ZSIGN_FRAMEWORK/Headers/zsign.h" << 'EOF'
 #ifndef zsign_h
 #define zsign_h
@@ -368,9 +398,9 @@ create_framework_header "$ZSIGN_FRAMEWORK" "zsign"
 echo -e "${GREEN}  ✅ zsign.framework${NC}"
 
 # ============================================================
-# 5. 编译 IPA
+# 5. 编译 IPA（不签名）
 # ============================================================
-echo -e "\n${YELLOW}📱 [5/5] 编译 IPA${NC}"
+echo -e "\n${YELLOW}📱 [5/5] 编译 IPA（不签名）${NC}"
 
 if [ ! -d "$XCODE_PROJECT" ]; then
     echo -e "${YELLOW}⚠️ 跳过 IPA 编译${NC}"
@@ -380,66 +410,49 @@ else
     
     echo "  版本: $VERSION ($BUILD_NUM)"
     
+    # 清理
     xcodebuild clean \
         -project "$XCODE_PROJECT" \
         -scheme "$XCODE_SCHEME" \
         -configuration "$XCODE_CONFIGURATION" || true
     
-    ARCHIVE_PATH="$BUILD_TEMP/PermanentStore.xcarchive"
-    if ! xcodebuild archive \
+    # 直接构建 .app（不签名）
+    BUILD_DIR="$BUILD_TEMP/Build"
+    mkdir -p "$BUILD_DIR"
+    
+    xcodebuild build \
         -project "$XCODE_PROJECT" \
         -scheme "$XCODE_SCHEME" \
         -configuration "$XCODE_CONFIGURATION" \
-        -archivePath "$ARCHIVE_PATH" \
         -sdk iphoneos \
+        -derivedDataPath "$BUILD_DIR" \
         CODE_SIGN_IDENTITY="" \
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGNING_ALLOWED=NO \
-        DEVELOPMENT_TEAM=""; then
-        echo -e "${YELLOW}⚠️ Archive 构建失败${NC}"
+        DEVELOPMENT_TEAM="" \
+        PROVISIONING_PROFILE_SPECIFIER=""
+    
+    # 查找生成的 .app
+    APP_PATH=$(find "$BUILD_DIR/Build/Products/$XCODE_CONFIGURATION-iphoneos" -name "*.app" | head -1)
+    
+    if [ -d "$APP_PATH" ]; then
+        # 复制 entitlements（可选）
+        cp "$ENTITLEMENTS_FILE" "$APP_PATH/entitlements.plist" 2>/dev/null || true
+        
+        # 打包成 IPA
+        IPA_NAME="PermanentStore_${VERSION}_${BUILD_NUM}.ipa"
+        mkdir -p "$IPA_OUTPUT/Payload"
+        cp -r "$APP_PATH" "$IPA_OUTPUT/Payload/"
+        cd "$IPA_OUTPUT"
+        zip -qr "$IPA_NAME" Payload/
+        rm -rf Payload
+        cd - > /dev/null
+        
+        echo -e "${GREEN}  ✅ IPA 生成成功: $IPA_OUTPUT/$IPA_NAME${NC}"
+        echo -e "${YELLOW}  ⚠️ IPA 未签名，需要自行签名后才能安装${NC}"
     else
-        APP_PATH="$ARCHIVE_PATH/Products/Applications/PermanentStore.app"
-        if [ -d "$APP_PATH" ]; then
-            # 复制 entitlements
-            cp "$ENTITLEMENTS_FILE" "$APP_PATH/entitlements.plist"
-            echo -e "${GREEN}  ✅ 已复制 entitlements.plist${NC}"
-            
-            # 使用 ldid 签名
-            if [ -f "$LDID_FRAMEWORK/ldid" ]; then
-                echo "  正在签名..."
-                "$LDID_FRAMEWORK/ldid" -S"$ENTITLEMENTS_FILE" "$APP_PATH/PermanentStore" 2>/dev/null && \
-                    echo -e "${GREEN}  ✅ ldid 签名成功${NC}" || \
-                    echo -e "${YELLOW}  ⚠️ ldid 签名失败${NC}"
-            fi
-        fi
-        
-        # 导出 IPA
-        cat > "$BUILD_TEMP/export.plist" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>method</key>
-    <string>development</string>
-    <key>signingStyle</key>
-    <string>manual</string>
-    <key>destination</key>
-    <string>export</string>
-</dict>
-</plist>
-EOF
-        
-        xcodebuild -exportArchive \
-            -archivePath "$ARCHIVE_PATH" \
-            -exportPath "$IPA_OUTPUT" \
-            -exportOptionsPlist "$BUILD_TEMP/export.plist" || true
-        
-        FINAL_IPA="$IPA_OUTPUT/PermanentStore_${VERSION}_${BUILD_NUM}.ipa"
-        IPA_FILE=$(find "$IPA_OUTPUT" -name "*.ipa" | head -1)
-        if [ -n "$IPA_FILE" ]; then
-            mv "$IPA_FILE" "$FINAL_IPA" 2>/dev/null || true
-            echo -e "${GREEN}  ✅ IPA: $FINAL_IPA${NC}"
-        fi
+        echo -e "${RED}  ❌ 未找到编译产物${NC}"
+        exit 1
     fi
 fi
 
@@ -458,7 +471,6 @@ for fw in "${FRAMEWORKS[@]}"; do
     fw_path="$FRAMEWORKS_OUTPUT/${fw}.framework"
     if [ -d "$fw_path" ]; then
         size=$(du -sh "$fw_path" 2>/dev/null | cut -f1)
-        # 检查必要文件
         if [ -f "$fw_path/Info.plist" ] && [ -f "$fw_path/Headers/${fw}.h" ]; then
             echo -e "  ${GREEN}✅${NC} $fw.framework ($size)"
         else
