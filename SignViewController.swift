@@ -19,12 +19,12 @@ class SignViewController: UIViewController {
     private var pseudoSwitch: UISwitch!
     private var pseudoLabel: UILabel!
 
-    // 动态控件（将根据引擎/模式重新创建）
+    // 动态控件
     private var teamIDField: UITextField?
     private var passwordField: UITextField?
     private var certTableView: UITableView?
     private var provTableView: UITableView?
-    private var zsignAdhocSwitch: UISwitch?   // zsign 伪签名专用开关
+    private var zsignAdhocSwitch: UISwitch?
 
     private var ipaLabel: UILabel!
     private var outputTextView: UITextView!
@@ -58,12 +58,22 @@ class SignViewController: UIViewController {
 
         NotificationCenter.default.addObserver(self, selector: #selector(openIPA(_:)), name: NSNotification.Name("OpenIPA"), object: nil)
     }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        scrollView.frame = view.bounds
+        contentView.frame.size.width = view.bounds.width
+    }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         refreshData()
         updateCertTable()
         updateProvisioningTable()
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - 读取用户预设
@@ -127,7 +137,7 @@ class SignViewController: UIViewController {
         contentView.addSubview(engineSegment)
         y += 44
 
-        // ---- 伪签名模式开关（卡片样式）----
+        // ---- 伪签名模式开关 ----
         let modeCard = UIView(frame: CGRect(x: pad, y: y, width: contentWidth, height: 52))
         modeCard.backgroundColor = Theme.card
         modeCard.layer.cornerRadius = 12
@@ -169,7 +179,7 @@ class SignViewController: UIViewController {
         contentView.addSubview(ipaLabel)
         y += 24
 
-        // ---- 真签名模式通用控件（密码 + 证书）----
+        // ---- 真签名模式通用控件 ----
         if config.mode == .real {
             // 证书密码
             addSectionTitle("证书密码", at: &y)
@@ -222,14 +232,12 @@ class SignViewController: UIViewController {
 
         // ---- 引擎专属控件 ----
         if config.mode == .adhoc {
-            // 伪签名模式
             if config.engine == .ldid2 {
                 addLdid2AdhocOptions(at: &y)
             } else if config.engine == .zsign {
                 addZsignAdhocOptions(at: &y)
             }
         } else {
-            // 真签名模式：zsign 需要描述文件
             if config.engine == .zsign {
                 addProvisioningTable(at: &y)
             }
@@ -383,11 +391,15 @@ class SignViewController: UIViewController {
 
     private func addZsignAdhocOptions(at y: inout CGFloat) {
         addSectionTitle("zsign 伪签名选项", at: &y)
-        // 可以添加 zsign 特有的额外开关，例如强制重签等，这里做一个示范开关
         let extraRow = makeSwitchRow("启用额外 Entitlements 合并", isOn: false) { [weak self] on in
-            // 可根据需要调整 config 或生成不同的 entitlements
             if on {
-                self?.config.entitlementContent = (self?.config.entitlementContent ?? "") + "\n<!-- extra flags -->"
+                if !(self?.config.entitlementContent?.contains("<!-- extra flags -->") ?? false) {
+                    self?.config.entitlementContent = (self?.config.entitlementContent ?? "") + "\n<!-- extra flags -->"
+                    self?.entTextView?.text = self?.config.entitlementContent
+                }
+            } else {
+                self?.config.entitlementContent = self?.config.entitlementContent?.replacingOccurrences(of: "\n<!-- extra flags -->", with: "")
+                self?.entTextView?.text = self?.config.entitlementContent
             }
         }
         extraRow.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
@@ -422,14 +434,14 @@ class SignViewController: UIViewController {
 
     // MARK: - UI 更新辅助
     private func updateCertTable() {
-        guard let tv = certTableView else { return }
+        guard let tv = certTableView, tv.superview != nil else { return }
         let newHeight = min(CGFloat(availableCerts.count * 44), 200)
         tv.frame.size.height = newHeight
         tv.reloadData()
     }
 
     private func updateProvisioningTable() {
-        guard let tv = provTableView else { return }
+        guard let tv = provTableView, tv.superview != nil else { return }
         let newHeight = min(CGFloat(availableProvisionings.count * 44), 120)
         tv.frame.size.height = newHeight
         tv.reloadData()
@@ -437,8 +449,9 @@ class SignViewController: UIViewController {
 
     // MARK: - Actions
     @objc private func engineChanged(_ sender: UISegmentedControl) {
+        let oldEngine = config.engine
         config.engine = sender.selectedSegmentIndex == 0 ? .ldid2 : .zsign
-        config.mode = .adhoc   // 重置为伪签名模式
+        config.mode = .adhoc
         buildUI()
     }
 
@@ -460,6 +473,12 @@ class SignViewController: UIViewController {
             outputTextView.text = "❌ 请先选择 IPA 文件"
             return
         }
+        
+        guard FileManager.default.fileExists(atPath: ipaPath) else {
+            outputTextView.text = "❌ IPA 文件不存在: \(ipaPath)"
+            return
+        }
+        
         if config.mode == .real && config.certPath == nil {
             outputTextView.text = "❌ 真签名模式需要选择证书"
             return
@@ -493,11 +512,9 @@ class SignViewController: UIViewController {
                     self.lastSignedPath = path
                     self.outputTextView.text += "✅ 签名成功！\n📁 \(path)\n"
                     self.installButton.isHidden = false
-                    self.installButton.setTitle("安装已签名的 IPA…", for: .normal)
                     self.showPostSignOptions(signedPath: path)
                 } else {
                     self.outputTextView.text += "❌ 签名失败\n"
-                    self.installButton.isHidden = true
                 }
             }
         }
