@@ -25,7 +25,7 @@ XCODE_SCHEME="PermanentStore"
 XCODE_CONFIGURATION="Release"
 
 IPA_OUTPUT="$ROOT_DIR/IPA"
-ENTITLEMENTS_FILE="$ROOT_DIR/entitlements.plist"  # 根目录
+ENTITLEMENTS_FILE="$ROOT_DIR/entitlements.plist"
 
 mkdir -p "$BUILD_TEMP" "$FRAMEWORKS_OUTPUT" "$IPA_OUTPUT"
 
@@ -41,7 +41,9 @@ echo -e "📱 IPA 输出: $IPA_OUTPUT"
 echo -e "🔐 Entitlements: $ENTITLEMENTS_FILE"
 
 CPU_CORES=$(sysctl -n hw.ncpu)
-[ "$CPU_CORES" -gt 4 ] && CPU_CORES=4
+if [ "$CPU_CORES" -gt 4 ]; then
+    CPU_CORES=4
+fi
 echo -e "🖥️  使用并发数: $CPU_CORES"
 
 # 检查根目录 entitlements 是否存在
@@ -52,18 +54,29 @@ if [ ! -f "$ENTITLEMENTS_FILE" ]; then
 fi
 
 # ============================================================
-# 辅助函数
+# 辅助函数 - 创建动态 Framework 结构
 # ============================================================
 
-create_framework_structure() {
+create_dynamic_framework() {
     local framework_dir="$1"
     local framework_name="$2"
+    local dylib_path="$3"
     
     rm -rf "$framework_dir"
     mkdir -p "$framework_dir"
     mkdir -p "$framework_dir/Headers"
     mkdir -p "$framework_dir/Modules"
+    mkdir -p "$framework_dir/Resources"
     
+    # 复制动态库并重命名
+    if [ -f "$dylib_path" ]; then
+        cp "$dylib_path" "$framework_dir/$framework_name"
+        chmod 755 "$framework_dir/$framework_name"
+        # 修改动态库的 install name
+        install_name_tool -id "@rpath/${framework_name}.framework/${framework_name}" "$framework_dir/$framework_name" 2>/dev/null || true
+    fi
+    
+    # 创建 Info.plist
     cat > "$framework_dir/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -89,6 +102,7 @@ create_framework_structure() {
 </plist>
 EOF
     
+    # 创建 modulemap
     cat > "$framework_dir/Modules/module.modulemap" << EOF
 framework module ${framework_name} {
     umbrella header "${framework_name}.h"
@@ -112,19 +126,21 @@ FOUNDATION_EXPORT const unsigned char ${framework_name}VersionString[];
 
 EOF
     
-    for header in "$framework_dir/Headers/"*.h 2>/dev/null; do
-        if [ -f "$header" ] && [ "$(basename "$header")" != "${framework_name}.h" ]; then
-            echo "#import <${framework_name}/$(basename "$header")>" >> "$framework_dir/Headers/${framework_name}.h"
-        fi
-    done
+    if [ -d "$framework_dir/Headers" ]; then
+        for header in "$framework_dir/Headers/"*.h; do
+            if [ -f "$header" ] && [ "$(basename "$header")" != "${framework_name}.h" ]; then
+                echo "#import <${framework_name}/$(basename "$header")>" >> "$framework_dir/Headers/${framework_name}.h"
+            fi
+        done 2>/dev/null || true
+    fi
     
     echo "#endif" >> "$framework_dir/Headers/${framework_name}.h"
 }
 
 # ============================================================
-# 1. 编译 OpenSSL.framework
+# 1. 编译 OpenSSL.framework (动态库)
 # ============================================================
-echo -e "\n${YELLOW}📦 [1/5] 编译 OpenSSL.framework${NC}"
+echo -e "\n${YELLOW}📦 [1/5] 编译 OpenSSL.framework (动态库)${NC}"
 
 cd "$BUILD_TEMP"
 if [ ! -d "openssl_src" ]; then
@@ -135,10 +151,11 @@ cd openssl_src
 make clean 2>/dev/null || true
 make distclean 2>/dev/null || true
 
+# 配置为动态库
 ./Configure ios64-cross \
     --prefix="$BUILD_TEMP/openssl_install" \
     --openssldir="$BUILD_TEMP/openssl_install/ssl" \
-    no-shared \
+    shared \
     no-tests \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="${MIN_IOS_VERSION}"
@@ -148,19 +165,29 @@ make install_sw
 
 cd ..
 
+# 创建动态 Framework
 OPENSSL_FRAMEWORK="$FRAMEWORKS_OUTPUT/OpenSSL.framework"
-create_framework_structure "$OPENSSL_FRAMEWORK" "OpenSSL"
+OPENSSL_DYLIB="$BUILD_TEMP/openssl_install/lib/libcrypto.dylib"
 
-find "$BUILD_TEMP/openssl_install/lib" -name "*.a" -exec lipo -create {} -output "$OPENSSL_FRAMEWORK/OpenSSL" \;
-cp -r "$BUILD_TEMP/openssl_install/include/"* "$OPENSSL_FRAMEWORK/Headers/"
-create_framework_header "$OPENSSL_FRAMEWORK" "OpenSSL"
-
-echo -e "${GREEN}  ✅ OpenSSL.framework${NC}"
+if [ -f "$OPENSSL_DYLIB" ]; then
+    create_dynamic_framework "$OPENSSL_FRAMEWORK" "OpenSSL" "$OPENSSL_DYLIB"
+    
+    # 复制头文件
+    if [ -d "$BUILD_TEMP/openssl_install/include" ]; then
+        cp -r "$BUILD_TEMP/openssl_install/include/"* "$OPENSSL_FRAMEWORK/Headers/"
+    fi
+    create_framework_header "$OPENSSL_FRAMEWORK" "OpenSSL"
+    
+    echo -e "${GREEN}  ✅ OpenSSL.framework (动态库)${NC}"
+else
+    echo -e "${RED}  ❌ OpenSSL 动态库编译失败${NC}"
+    exit 1
+fi
 
 # ============================================================
-# 2. 编译 PLIST.framework
+# 2. 编译 PLIST.framework (动态库)
 # ============================================================
-echo -e "\n${YELLOW}📦 [2/5] 编译 PLIST.framework${NC}"
+echo -e "\n${YELLOW}📦 [2/5] 编译 PLIST.framework (动态库)${NC}"
 
 if ! command -v libtoolize &> /dev/null; then
     brew install autoconf automake libtool
@@ -184,10 +211,11 @@ export CXX="xcrun -sdk iphoneos clang++ -arch arm64"
 export CFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=${MIN_IOS_VERSION}"
 export CXXFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=${MIN_IOS_VERSION}"
 
+# 配置为动态库
 ./configure \
     --prefix="$BUILD_TEMP/libplist_install" \
-    --enable-static \
-    --disable-shared \
+    --enable-shared \
+    --disable-static \
     --disable-tests \
     --host=arm64-apple-darwin
 
@@ -196,19 +224,29 @@ make install
 
 cd ..
 
+# 创建动态 Framework
 PLIST_FRAMEWORK="$FRAMEWORKS_OUTPUT/PLIST.framework"
-create_framework_structure "$PLIST_FRAMEWORK" "PLIST"
+PLIST_DYLIB="$BUILD_TEMP/libplist_install/lib/libplist-2.0.dylib"
 
-find "$BUILD_TEMP/libplist_install/lib" -name "*.a" -exec lipo -create {} -output "$PLIST_FRAMEWORK/PLIST" \;
-cp -r "$BUILD_TEMP/libplist_install/include/"* "$PLIST_FRAMEWORK/Headers/"
-create_framework_header "$PLIST_FRAMEWORK" "PLIST"
-
-echo -e "${GREEN}  ✅ PLIST.framework${NC}"
+if [ -f "$PLIST_DYLIB" ]; then
+    create_dynamic_framework "$PLIST_FRAMEWORK" "PLIST" "$PLIST_DYLIB"
+    
+    # 复制头文件
+    if [ -d "$BUILD_TEMP/libplist_install/include" ]; then
+        cp -r "$BUILD_TEMP/libplist_install/include/"* "$PLIST_FRAMEWORK/Headers/"
+    fi
+    create_framework_header "$PLIST_FRAMEWORK" "PLIST"
+    
+    echo -e "${GREEN}  ✅ PLIST.framework (动态库)${NC}"
+else
+    echo -e "${RED}  ❌ PLIST 动态库编译失败${NC}"
+    exit 1
+fi
 
 # ============================================================
-# 3. 编译 ldid.framework
+# 3. 编译 ldid.framework (动态库)
 # ============================================================
-echo -e "\n${YELLOW}📦 [3/5] 编译 ldid.framework${NC}"
+echo -e "\n${YELLOW}📦 [3/5] 编译 ldid.framework (动态库)${NC}"
 
 cd "$BUILD_TEMP"
 if [ ! -d "ldid_src" ]; then
@@ -217,82 +255,18 @@ fi
 
 cd ldid_src
 
-# 创建完整的修复补丁
-cat > ldid_fix.patch << 'PATCHEOF'
---- a/ldid.cpp
-+++ b/ldid.cpp
-@@ -33,6 +33,9 @@
- #include <openssl/pem.h>
- #include <openssl/x509.h>
- #include <openssl/x509v3.h>
-+#include <openssl/x509_vfy.h>
-+#include <openssl/asn1.h>
-+#include <openssl/objects.h>
- 
- #include <CommonCrypto/CommonDigest.h>
- 
-@@ -2391,11 +2394,13 @@
-     return NULL;
- }
- 
--static void get(std::string &value, X509_NAME *name, int nid) {
--    if (value.empty())
--        if (int lastpos = X509_NAME_get_index_by_NID(name, nid, -1); -1 != lastpos)
--            if (X509_NAME_ENTRY *e = X509_NAME_get_entry(name, lastpos))
--                if (ASN1_STRING *s = X509_NAME_ENTRY_get_data(e))
-+static void get(std::string &value, const X509_NAME *name, int nid) {
-+    if (value.empty()) {
-+        X509_NAME *mutable_name = const_cast<X509_NAME*>(name);
-+        if (int lastpos = X509_NAME_get_index_by_NID(mutable_name, nid, -1); -1 != lastpos)
-+            if (X509_NAME_ENTRY *e = X509_NAME_get_entry(mutable_name, lastpos))
-+                if (ASN1_STRING *s = X509_NAME_ENTRY_get_data(e))
-                     if (const unsigned char *str = ASN1_STRING_get0_data(s))
-                         value = reinterpret_cast<const char *>(str);
-+    }
- }
- 
- #ifdef __APPLE__
-@@ -2448,9 +2453,9 @@
-     X509_NAME *name = X509_get_subject_name(x);
-     if (!name)
-         return;
--    get(team, name, NID_organizationalUnitName);
-+    get(team, const_cast<const X509_NAME*>(name), NID_organizationalUnitName);
-     // Check for "Apple Development: " style name.
--    get(common, name, NID_commonName);
-+    get(common, const_cast<const X509_NAME*>(name), NID_commonName);
- }
- 
- #ifdef __APPLE__
-@@ -4085,7 +4090,7 @@
-                     const char *data = (const char *) ASN1_STRING_get0_data(s);
-                     size_t size = ASN1_STRING_length(s);
-                     if (strncmp("subject", data, size) == 0) {
--                        X509_NAME *nm = X509_get_subject_name(x);
-+                        const X509_NAME *nm = X509_get_subject_name(x);
-                         if (nm) {
-                             if (!(flags & kFlagWild) && (flags & kFlagMobile))
-                                 if (int lastpos = X509_NAME_get_index_by_NID(nm, NID_commonName, -1); -1 != lastpos)
-@@ -4092,12 +4097,12 @@
-                                     if (X509_NAME_ENTRY *e = X509_NAME_get_entry(nm, lastpos))
-                                         if (ASN1_STRING *s = X509_NAME_ENTRY_get_data(e))
-                                             Check(data = (const char *) ASN1_STRING_get0_data(s), size = ASN1_STRING_length(s));
--                            X509_NAME *issuer = X509_get_issuer_name(x);
-+                            const X509_NAME *issuer = X509_get_issuer_name(x);
-                             if (issuer)
-                                 if (int lastpos = X509_NAME_get_index_by_NID(issuer, NID_commonName, -1); -1 != lastpos)
-                                     if (X509_NAME_ENTRY *e = X509_NAME_get_entry(issuer, lastpos))
-                                         if (ASN1_STRING *s = X509_NAME_ENTRY_get_data(e))
--                                            Check(data = (const char *) ASN1_STRING_get0_data(s), size = ASN1_STRING_length(s));
-+                                            Check(data = (const char *) ASN1_STRING_get0_data(s), size = ASN1_STRING_length(s));
-                         }
-                     }
-                     if (!strncmp("signature", data, size) || !strncmp("leaf", data, size)) {
-PATCHEOF
+# 应用 OpenSSL 兼容性修复
+if ! grep -q "const X509_NAME" ldid.cpp 2>/dev/null; then
+    echo "  应用 OpenSSL 兼容性补丁..."
+    sed -i '' 's/X509_NAME \*name/const X509_NAME *name/g' ldid.cpp
+    sed -i '' 's/X509_NAME_get_index_by_NID(name,/X509_NAME_get_index_by_NID(const_cast<X509_NAME*>(name),/g' ldid.cpp
+    sed -i '' 's/X509_NAME_get_entry(name,/X509_NAME_get_entry(const_cast<X509_NAME*>(name),/g' ldid.cpp
+fi
 
-patch -p1 < ldid_fix.patch 2>/dev/null || echo "  补丁已应用"
+# 编译为动态库
+echo "  编译 ldid 动态库..."
 
-# 编译静态库
+# 编译每个目标文件
 xcrun -sdk iphoneos clang++ \
     -arch arm64 \
     -std=c++17 \
@@ -300,33 +274,47 @@ xcrun -sdk iphoneos clang++ \
     -mios-version-min="${MIN_IOS_VERSION}" \
     -I"$BUILD_TEMP/openssl_install/include" \
     -I"$BUILD_TEMP/libplist_install/include" \
-    -DLDID_VERSION="\"2.1.5\"" \
-    -fvisibility=hidden \
-    -c ldid.cpp -o ldid.o
+    -DLDID_VERSION='"2.1.5"' \
+    -fPIC \
+    -c ldid.cpp -o ldid.o 2>/dev/null || true
 
 xcrun -sdk iphoneos clang++ \
     -arch arm64 \
     -std=c++17 \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="${MIN_IOS_VERSION}" \
-    -c lookup2.cpp -o lookup2.o
+    -fPIC \
+    -c lookup2.cpp -o lookup2.o 2>/dev/null || true
 
 xcrun -sdk iphoneos clang \
     -arch arm64 \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="${MIN_IOS_VERSION}" \
-    -c sha1.c -o sha1.o
+    -fPIC \
+    -c sha1.c -o sha1.o 2>/dev/null || true
 
-ar rcs libldid.a ldid.o lookup2.o sha1.o
+# 创建动态库
+xcrun -sdk iphoneos clang++ \
+    -arch arm64 \
+    -dynamiclib \
+    -isysroot "$DEVICE_SDK_PATH" \
+    -mios-version-min="${MIN_IOS_VERSION}" \
+    -L"$BUILD_TEMP/openssl_install/lib" \
+    -L"$BUILD_TEMP/libplist_install/lib" \
+    -lcrypto -lplist-2.0 \
+    -install_name "@rpath/ldid.framework/ldid" \
+    -o libldid.dylib ldid.o lookup2.o sha1.o 2>/dev/null || true
 
 cd ..
 
+# 创建动态 Framework
 LDID_FRAMEWORK="$FRAMEWORKS_OUTPUT/ldid.framework"
-create_framework_structure "$LDID_FRAMEWORK" "ldid"
+LDID_DYLIB="ldid_src/libldid.dylib"
 
-cp "ldid_src/libldid.a" "$LDID_FRAMEWORK/ldid"
-
-cat > "$LDID_FRAMEWORK/Headers/ldid.h" << 'EOF'
+if [ -f "$LDID_DYLIB" ]; then
+    create_dynamic_framework "$LDID_FRAMEWORK" "ldid" "$LDID_DYLIB"
+    
+    cat > "$LDID_FRAMEWORK/Headers/ldid.h" << 'EOF'
 #ifndef ldid_h
 #define ldid_h
 
@@ -352,15 +340,17 @@ char* ldid_get_entitlements(const char* path);
 
 #endif
 EOF
-
-create_framework_header "$LDID_FRAMEWORK" "ldid"
-
-echo -e "${GREEN}  ✅ ldid.framework${NC}"
+    
+    create_framework_header "$LDID_FRAMEWORK" "ldid"
+    echo -e "${GREEN}  ✅ ldid.framework (动态库)${NC}"
+else
+    echo -e "${YELLOW}  ⚠️ ldid 动态库编译失败，跳过${NC}"
+fi
 
 # ============================================================
-# 4. 编译 zsign.framework
+# 4. 编译 zsign.framework (动态库)
 # ============================================================
-echo -e "\n${YELLOW}📦 [4/5] 编译 zsign.framework${NC}"
+echo -e "\n${YELLOW}📦 [4/5] 编译 zsign.framework (动态库)${NC}"
 
 cd "$BUILD_TEMP"
 if [ ! -d "zsign_src" ]; then
@@ -369,45 +359,60 @@ fi
 
 cd zsign_src
 
-# 收集所有源文件
-CPP_FILES=$(find . -maxdepth 1 -name "*.cpp" 2>/dev/null | tr '\n' ' ')
-C_FILES=$(find . -maxdepth 1 -name "*.c" 2>/dev/null | tr '\n' ' ')
-
+# 编译所有源文件为 PIC
 OBJS=""
-
-for src in $C_FILES; do
-    obj="${src%.c}.o"
-    xcrun -sdk iphoneos clang \
-        -arch arm64 \
-        -isysroot "$DEVICE_SDK_PATH" \
-        -mios-version-min="${MIN_IOS_VERSION}" \
-        -I"$BUILD_TEMP/openssl_install/include" \
-        -c "$src" -o "$obj"
-    OBJS="$OBJS $obj"
+for src in *.c 2>/dev/null; do
+    if [ -f "$src" ]; then
+        obj="${src%.c}.o"
+        xcrun -sdk iphoneos clang \
+            -arch arm64 \
+            -fPIC \
+            -isysroot "$DEVICE_SDK_PATH" \
+            -mios-version-min="${MIN_IOS_VERSION}" \
+            -I"$BUILD_TEMP/openssl_install/include" \
+            -c "$src" -o "$obj" 2>/dev/null
+        OBJS="$OBJS $obj"
+    fi
 done
 
-for src in $CPP_FILES; do
-    obj="${src%.cpp}.o"
+for src in *.cpp 2>/dev/null; do
+    if [ -f "$src" ]; then
+        obj="${src%.cpp}.o"
+        xcrun -sdk iphoneos clang++ \
+            -arch arm64 \
+            -std=c++11 \
+            -fPIC \
+            -isysroot "$DEVICE_SDK_PATH" \
+            -mios-version-min="${MIN_IOS_VERSION}" \
+            -I"$BUILD_TEMP/openssl_install/include" \
+            -c "$src" -o "$obj" 2>/dev/null
+        OBJS="$OBJS $obj"
+    fi
+done
+
+# 创建动态库
+if [ -n "$OBJS" ]; then
     xcrun -sdk iphoneos clang++ \
         -arch arm64 \
-        -std=c++11 \
+        -dynamiclib \
         -isysroot "$DEVICE_SDK_PATH" \
         -mios-version-min="${MIN_IOS_VERSION}" \
-        -I"$BUILD_TEMP/openssl_install/include" \
-        -c "$src" -o "$obj"
-    OBJS="$OBJS $obj"
-done
-
-ar rcs libzsign.a $OBJS
+        -L"$BUILD_TEMP/openssl_install/lib" \
+        -lcrypto \
+        -install_name "@rpath/zsign.framework/zsign" \
+        -o libzsign.dylib $OBJS 2>/dev/null || true
+fi
 
 cd ..
 
+# 创建动态 Framework
 ZSIGN_FRAMEWORK="$FRAMEWORKS_OUTPUT/zsign.framework"
-create_framework_structure "$ZSIGN_FRAMEWORK" "zsign"
+ZSIGN_DYLIB="zsign_src/libzsign.dylib"
 
-cp "zsign_src/libzsign.a" "$ZSIGN_FRAMEWORK/zsign"
-
-cat > "$ZSIGN_FRAMEWORK/Headers/zsign.h" << 'EOF'
+if [ -f "$ZSIGN_DYLIB" ]; then
+    create_dynamic_framework "$ZSIGN_FRAMEWORK" "zsign" "$ZSIGN_DYLIB"
+    
+    cat > "$ZSIGN_FRAMEWORK/Headers/zsign.h" << 'EOF'
 #ifndef zsign_h
 #define zsign_h
 
@@ -438,95 +443,74 @@ int zsign_sign_file(const char* file_path, const char* p12_path, const char* pas
 
 #endif
 EOF
-
-create_framework_header "$ZSIGN_FRAMEWORK" "zsign"
-
-echo -e "${GREEN}  ✅ zsign.framework${NC}"
+    
+    create_framework_header "$ZSIGN_FRAMEWORK" "zsign"
+    echo -e "${GREEN}  ✅ zsign.framework (动态库)${NC}"
+else
+    echo -e "${YELLOW}  ⚠️ zsign 动态库编译失败，跳过${NC}"
+fi
 
 # ============================================================
-# 5. 编译 IPA（使用根目录 entitlements）
+# 5. 编译 IPA
 # ============================================================
 echo -e "\n${YELLOW}📱 [5/5] 编译 IPA${NC}"
 
 if [ ! -d "$XCODE_PROJECT" ]; then
-    echo -e "${RED}  ❌ 未找到 Xcode 项目: $XCODE_PROJECT${NC}"
-    exit 1
-fi
-
-VERSION=$(defaults read "$ROOT_DIR/PermanentStore/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0")
-BUILD_NUM=$(defaults read "$ROOT_DIR/PermanentStore/Info.plist" CFBundleVersion 2>/dev/null || echo "1")
-
-echo "  版本: $VERSION ($BUILD_NUM)"
-echo "  使用 entitlements: $ENTITLEMENTS_FILE"
-
-# 显示 entitlements 内容
-echo "  Entitlements 内容:"
-cat "$ENTITLEMENTS_FILE" | head -10 | sed 's/^/    /'
-
-# 构建
-BUILD_DIR="$BUILD_TEMP/Build"
-mkdir -p "$BUILD_DIR"
-
-xcodebuild clean \
-    -project "$XCODE_PROJECT" \
-    -scheme "$XCODE_SCHEME" \
-    -configuration "$XCODE_CONFIGURATION" 2>/dev/null || true
-
-# 设置 Framework 搜索路径
-FRAMEWORK_SEARCH_PATHS="$FRAMEWORKS_OUTPUT"
-
-xcodebuild build \
-    -project "$XCODE_PROJECT" \
-    -scheme "$XCODE_SCHEME" \
-    -configuration "$XCODE_CONFIGURATION" \
-    -sdk iphoneos \
-    -derivedDataPath "$BUILD_DIR" \
-    FRAMEWORK_SEARCH_PATHS="$FRAMEWORK_SEARCH_PATHS" \
-    CODE_SIGN_ENTITLEMENTS="$ENTITLEMENTS_FILE" \
-    CODE_SIGN_IDENTITY="" \
-    CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=NO \
-    OTHER_CODE_SIGN_FLAGS="--entitlements $ENTITLEMENTS_FILE"
-
-# 查找 .app
-APP_PATH=$(find "$BUILD_DIR/Build/Products/$XCODE_CONFIGURATION-iphoneos" -name "*.app" | head -1)
-
-if [ ! -d "$APP_PATH" ]; then
-    echo -e "${RED}  ❌ 未找到编译产物${NC}"
-    exit 1
-fi
-
-echo "  App 路径: $APP_PATH"
-
-# 将 Frameworks 复制到 app 中
-mkdir -p "$APP_PATH/Frameworks"
-for framework in "$FRAMEWORKS_OUTPUT"/*.framework; do
-    if [ -d "$framework" ]; then
-        cp -r "$framework" "$APP_PATH/Frameworks/"
-        echo "  复制 Framework: $(basename "$framework")"
+    echo -e "${YELLOW}  ⚠️ 未找到 Xcode 项目，跳过 IPA 编译${NC}"
+else
+    VERSION=$(defaults read "$ROOT_DIR/PermanentStore/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0")
+    BUILD_NUM=$(defaults read "$ROOT_DIR/PermanentStore/Info.plist" CFBundleVersion 2>/dev/null || echo "1")
+    
+    echo "  版本: $VERSION ($BUILD_NUM)"
+    
+    BUILD_DIR="$BUILD_TEMP/Build"
+    mkdir -p "$BUILD_DIR"
+    
+    # 构建
+    xcodebuild build \
+        -project "$XCODE_PROJECT" \
+        -scheme "$XCODE_SCHEME" \
+        -configuration "$XCODE_CONFIGURATION" \
+        -sdk iphoneos \
+        -derivedDataPath "$BUILD_DIR" \
+        FRAMEWORK_SEARCH_PATHS="$FRAMEWORKS_OUTPUT" \
+        LD_RUNPATH_SEARCH_PATHS="@executable_path/Frameworks @loader_path/Frameworks" \
+        CODE_SIGN_ENTITLEMENTS="$ENTITLEMENTS_FILE" \
+        CODE_SIGN_IDENTITY="" \
+        CODE_SIGNING_REQUIRED=NO \
+        CODE_SIGNING_ALLOWED=NO || true
+    
+    # 查找 .app
+    APP_PATH=$(find "$BUILD_DIR/Build/Products/$XCODE_CONFIGURATION-iphoneos" -name "*.app" 2>/dev/null | head -1)
+    
+    if [ -d "$APP_PATH" ]; then
+        # 复制动态 Frameworks 到 app 中
+        mkdir -p "$APP_PATH/Frameworks"
+        for framework in "$FRAMEWORKS_OUTPUT"/*.framework; do
+            if [ -d "$framework" ]; then
+                cp -r "$framework" "$APP_PATH/Frameworks/"
+                echo "  复制 Framework: $(basename "$framework")"
+            fi
+        done
+        
+        # 复制 entitlements
+        cp "$ENTITLEMENTS_FILE" "$APP_PATH/entitlements.plist" 2>/dev/null || true
+        
+        # 打包 IPA
+        IPA_NAME="PermanentStore_${VERSION}_${BUILD_NUM}.ipa"
+        mkdir -p "$IPA_OUTPUT/Payload"
+        cp -r "$APP_PATH" "$IPA_OUTPUT/Payload/"
+        cd "$IPA_OUTPUT"
+        zip -qr "$IPA_NAME" Payload/
+        rm -rf Payload
+        cd - > /dev/null
+        
+        echo -e "${GREEN}  ✅ IPA 生成成功: $IPA_OUTPUT/$IPA_NAME${NC}"
+        echo -e "${YELLOW}  ⚠️ IPA 包含动态 Frameworks，需要签名后才能安装${NC}"
+    else
+        echo -e "${YELLOW}  ⚠️ 未找到编译产物${NC}"
     fi
-done
-
-# 复制 entitlements 到 app 中
-cp "$ENTITLEMENTS_FILE" "$APP_PATH/archived-expanded-entitlements.xcent" 2>/dev/null || true
-cp "$ENTITLEMENTS_FILE" "$APP_PATH/entitlements.plist" 2>/dev/null || true
-
-# 使用 ldid 签名（如果需要）
-if [ -f "$LDID_FRAMEWORK/ldid" ]; then
-    echo "  使用 ldid 签名..."
-    "$LDID_FRAMEWORK/ldid" -S "$ENTITLEMENTS_FILE" "$APP_PATH" 2>/dev/null || echo "  签名跳过"
 fi
-
-# 打包 IPA
-IPA_NAME="PermanentStore_${VERSION}_${BUILD_NUM}.ipa"
-mkdir -p "$IPA_OUTPUT/Payload"
-cp -r "$APP_PATH" "$IPA_OUTPUT/Payload/"
-cd "$IPA_OUTPUT"
-zip -qr "$IPA_NAME" Payload/
-rm -rf Payload
-cd - > /dev/null
-
-echo -e "${GREEN}  ✅ IPA 生成成功: $IPA_OUTPUT/$IPA_NAME${NC}"
 
 # ============================================================
 # 验证所有产物
@@ -540,13 +524,19 @@ for fw in OpenSSL PLIST ldid zsign; do
     fw_path="$FRAMEWORKS_OUTPUT/${fw}.framework"
     if [ -d "$fw_path" ]; then
         size=$(du -sh "$fw_path" 2>/dev/null | cut -f1)
-        echo -e "  ${GREEN}✅${NC} $fw.framework ($size)"
+        if [ -f "$fw_path/$fw" ]; then
+            file "$fw_path/$fw" 2>/dev/null | grep -q "dynamically linked" && type="动态库" || type="静态库"
+        else
+            type="未知"
+        fi
+        echo -e "  ${GREEN}✅${NC} $fw.framework ($size, $type)"
     else
         echo -e "  ${RED}❌${NC} $fw.framework (缺失)"
     fi
 done
 
 echo ""
-echo -e "📱 IPA: $IPA_OUTPUT/$IPA_NAME"
-echo -e "🔐 Entitlements: $ENTITLEMENTS_FILE (根目录)"
-echo -e "\n${GREEN}✅ 所有组件构建成功！${NC}"
+if ls "$IPA_OUTPUT"/*.ipa 2>/dev/null; then
+    echo -e "📱 IPA: $(ls "$IPA_OUTPUT"/*.ipa 2>/dev/null)"
+fi
+echo -e "🔐 Entitlements: $ENTITLEMENTS_FILE"
