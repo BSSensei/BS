@@ -8,6 +8,7 @@ struct Theme {
     static let textSecondary = UIColor(white: 0.7, alpha: 1.0)
     static let separator = UIColor(white: 0.25, alpha: 1.0)
     static let destructive = UIColor.systemRed
+    static let toolbar = UIColor(white: 0.08, alpha: 1.0)
     
     static func styleNavBar(_ navBar: UINavigationBar) {
         let appearance = UINavigationBarAppearance()
