@@ -91,9 +91,9 @@ class InstallManager {
             
             switch method {
             case .itunesstored:
-                result = self.itunesstored安装(ipaPath: ipaPath, startTime: startTime)
+                result = self.installWithItunesstored(ipaPath: ipaPath, startTime: startTime)
             case .systemInstall:
-                result = self.系统安装(ipaPath: ipaPath, startTime: startTime)
+                result = self.installWithSystem(ipaPath: ipaPath, startTime: startTime)
             }
             
             DispatchQueue.main.async {
@@ -104,19 +104,19 @@ class InstallManager {
     
     // MARK: - itunesstored 安装（巨魔商店方式）
     
-    private func itunesstored安装(ipaPath: String, startTime: Date) -> InstallResult {
-        let 临时目录 = NSTemporaryDirectory() + "安装_\(UUID().uuidString)"
-        let payload目录 = 临时目录 + "/Payload"
+    private func installWithItunesstored(ipaPath: String, startTime: Date) -> InstallResult {
+        let tempDir = NSTemporaryDirectory() + "install_\(UUID().uuidString)"
+        let payloadDir = tempDir + "/Payload"
         
         // 用完就删
-        defer { try? FileManager.default.removeItem(atPath: 临时目录) }
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
         
         // 第一步：解压 IPA
-        let 解压命令 = "unzip -o -q '\(ipaPath)' -d '\(临时目录)'"
-        _ = RootHelper.execute(解压命令)
+        let unzipCmd = "unzip -o -q '\(ipaPath)' -d '\(tempDir)'"
+        _ = RootHelper.execute(unzipCmd)
         
         // 找到 .app 包
-        guard let app名称 = try? FileManager.default.contentsOfDirectory(atPath: payload目录).first(where: { $0.hasSuffix(".app") }) else {
+        guard let appName = try? FileManager.default.contentsOfDirectory(atPath: payloadDir).first(where: { $0.hasSuffix(".app") }) else {
             return InstallResult(
                 success: false,
                 message: "解压 IPA 失败",
@@ -125,48 +125,48 @@ class InstallManager {
             )
         }
         
-        let app路径 = payload目录 + "/" + app名称
+        let appPath = payloadDir + "/" + appName
         
         // 第二步：用 itunesstored 安装
-        let 安装命令 = "itunesstored --install-app '\(app路径)'"
-        let 输出 = RootHelper.execute(安装命令)
-        print("PermanentStore: itunesstored 输出：\(输出)")
+        let installCmd = "itunesstored --install-app '\(appPath)'"
+        let output = RootHelper.execute(installCmd)
+        print("InstallManager: itunesstored 输出：\(output)")
         
         // 第三步：检查是否安装成功
-        let bundleID = 获取BundleID(from: app路径)
-        let 安装成功 = 检查应用已安装(bundleID: bundleID)
+        let bundleID = getBundleID(from: appPath)
+        let installed = checkAppInstalled(bundleID: bundleID)
         
-        if 安装成功 {
+        if installed {
             // 刷新图标缓存
             RootHelper.execute("uicache -a")
             
-            let 耗时 = Date().timeIntervalSince(startTime)
-            let 消息 = "安装成功！\n方式：itunesstored\nBundle ID：\(bundleID ?? "未知")"
-            return InstallResult(success: true, message: 消息, method: .itunesstored, duration: 耗时)
+            let duration = Date().timeIntervalSince(startTime)
+            let message = "安装成功！\n方式：itunesstored\nBundle ID：\(bundleID ?? "未知")"
+            return InstallResult(success: true, message: message, method: .itunesstored, duration: duration)
         } else {
-            let 耗时 = Date().timeIntervalSince(startTime)
+            let duration = Date().timeIntervalSince(startTime)
             return InstallResult(
                 success: false,
-                message: "安装失败\n输出：\(输出)",
+                message: "安装失败\n输出：\(output)",
                 method: .itunesstored,
-                duration: 耗时
+                duration: duration
             )
         }
     }
     
     // MARK: - 系统进程安装（直接复制文件）
     
-    private func 系统安装(ipaPath: String, startTime: Date) -> InstallResult {
-        let 临时目录 = NSTemporaryDirectory() + "安装_\(UUID().uuidString)"
-        let payload目录 = 临时目录 + "/Payload"
+    private func installWithSystem(ipaPath: String, startTime: Date) -> InstallResult {
+        let tempDir = NSTemporaryDirectory() + "install_\(UUID().uuidString)"
+        let payloadDir = tempDir + "/Payload"
         
-        defer { try? FileManager.default.removeItem(atPath: 临时目录) }
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
         
         // 第一步：解压
-        let 解压命令 = "unzip -o -q '\(ipaPath)' -d '\(临时目录)'"
-        _ = RootHelper.execute(解压命令)
+        let unzipCmd = "unzip -o -q '\(ipaPath)' -d '\(tempDir)'"
+        _ = RootHelper.execute(unzipCmd)
         
-        guard let app名称 = try? FileManager.default.contentsOfDirectory(atPath: payload目录).first(where: { $0.hasSuffix(".app") }) else {
+        guard let appName = try? FileManager.default.contentsOfDirectory(atPath: payloadDir).first(where: { $0.hasSuffix(".app") }) else {
             return InstallResult(
                 success: false,
                 message: "解压 IPA 失败",
@@ -175,29 +175,29 @@ class InstallManager {
             )
         }
         
-        let app路径 = payload目录 + "/" + app名称
-        let bundleID = 获取BundleID(from: app路径) ?? app名称.replacingOccurrences(of: ".app", with: "")
-        let 可执行文件名 = app名称.replacingOccurrences(of: ".app", with: "")
+        let appPath = payloadDir + "/" + appName
+        let bundleID = getBundleID(from: appPath) ?? appName.replacingOccurrences(of: ".app", with: "")
+        let executableName = appName.replacingOccurrences(of: ".app", with: "")
         
         // 第二步：目标路径
-        let 应用目录 = "/var/containers/Bundle/Application/\(bundleID)"
-        let 数据目录 = "/var/containers/Data/Application/\(bundleID)"
-        let 目标App路径 = 应用目录 + "/" + app名称
+        let appContainerDir = "/var/containers/Bundle/Application/\(bundleID)"
+        let dataContainerDir = "/var/containers/Data/Application/\(bundleID)"
+        let targetAppPath = appContainerDir + "/" + appName
         
         // 第三步：执行安装命令序列
-        let 命令列表 = [
-            "mkdir -p '\(应用目录)'",
-            "mkdir -p '\(数据目录)'",
-            "cp -R '\(app路径)' '\(应用目录)/'",
-            "chown -R mobile:mobile '\(应用目录)'",
-            "chown -R mobile:mobile '\(数据目录)'",
-            "chmod +x '\(目标App路径)/\(可执行文件名)'"
+        let commands = [
+            "mkdir -p '\(appContainerDir)'",
+            "mkdir -p '\(dataContainerDir)'",
+            "cp -R '\(appPath)' '\(appContainerDir)/'",
+            "chown -R mobile:mobile '\(appContainerDir)'",
+            "chown -R mobile:mobile '\(dataContainerDir)'",
+            "chmod +x '\(targetAppPath)/\(executableName)'"
         ]
         
-        for 命令 in 命令列表 {
-            let 输出 = RootHelper.execute(命令)
-            if !输出.isEmpty {
-                print("PermanentStore: 执行 [\(命令)] → \(输出)")
+        for cmd in commands {
+            let output = RootHelper.execute(cmd)
+            if !output.isEmpty {
+                print("InstallManager: 执行 [\(cmd)] → \(output)")
             }
         }
         
@@ -208,23 +208,23 @@ class InstallManager {
         Thread.sleep(forTimeInterval: 1.5)
         
         // 第六步：验证安装
-        let 已复制 = FileManager.default.fileExists(atPath: 目标App路径)
-        let 已注册 = 检查应用已安装(bundleID: bundleID)
+        let copied = FileManager.default.fileExists(atPath: targetAppPath)
+        let registered = checkAppInstalled(bundleID: bundleID)
         
-        if 已复制 || 已注册 {
+        if copied || registered {
             // 重启主屏幕让图标出现
             RootHelper.execute("killall -9 SpringBoard")
             
-            let 耗时 = Date().timeIntervalSince(startTime)
-            let 消息 = "安装成功！\n方式：系统直接安装\nBundle ID：\(bundleID)\n正在重启主屏幕…"
-            return InstallResult(success: true, message: 消息, method: .systemInstall, duration: 耗时)
+            let duration = Date().timeIntervalSince(startTime)
+            let message = "安装成功！\n方式：系统直接安装\nBundle ID：\(bundleID)\n正在重启主屏幕…"
+            return InstallResult(success: true, message: message, method: .systemInstall, duration: duration)
         } else {
-            let 耗时 = Date().timeIntervalSince(startTime)
+            let duration = Date().timeIntervalSince(startTime)
             return InstallResult(
                 success: false,
                 message: "安装失败，请检查权限或手动安装",
                 method: .systemInstall,
-                duration: 耗时
+                duration: duration
             )
         }
     }
@@ -232,30 +232,30 @@ class InstallManager {
     // MARK: - 辅助函数
     
     /// 从 .app 中读取 Bundle ID
-    private func 获取BundleID(from appPath: String) -> String? {
-        let plist路径 = appPath + "/Info.plist"
-        guard let info = NSDictionary(contentsOfFile: plist路径) else { return nil }
+    private func getBundleID(from appPath: String) -> String? {
+        let plistPath = appPath + "/Info.plist"
+        guard let info = NSDictionary(contentsOfFile: plistPath) else { return nil }
         return info["CFBundleIdentifier"] as? String
     }
     
     /// 检查应用是否已安装
-    private func 检查应用已安装(bundleID: String?) -> Bool {
+    private func checkAppInstalled(bundleID: String?) -> Bool {
         guard let id = bundleID else { return false }
         
         // 方法1：通过 lsregister 检查
-        let 查询命令 = "lsregister -dump 2>/dev/null | grep -c '\(id)'"
-        let 输出 = RootHelper.execute(查询命令)
-        let 计数 = Int(输出.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let queryCmd = "lsregister -dump 2>/dev/null | grep -c '\(id)'"
+        let output = RootHelper.execute(queryCmd)
+        let count = Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         
-        if 计数 > 0 { return true }
+        if count > 0 { return true }
         
         // 方法2：检查应用目录是否存在
-        let 应用路径 = "/var/containers/Bundle/Application/\(id)"
-        if FileManager.default.fileExists(atPath: 应用路径) { return true }
+        let appPath = "/var/containers/Bundle/Application/\(id)"
+        if FileManager.default.fileExists(atPath: appPath) { return true }
         
         // 方法3：遍历查找（慢但可靠）
-        let 查找命令 = "find /var/containers/Bundle/Application -maxdepth 2 -name '*.app' -exec grep -l '\(id)' {}/Info.plist \\; 2>/dev/null | head -1"
-        let 结果 = RootHelper.execute(查找命令)
-        return !结果.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let findCmd = "find /var/containers/Bundle/Application -maxdepth 2 -name '*.app' -exec grep -l '\(id)' {}/Info.plist \\; 2>/dev/null | head -1"
+        let result = RootHelper.execute(findCmd)
+        return !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
