@@ -102,7 +102,7 @@ class FileViewController: UIViewController {
     }
 
     private func refreshFiles() {
-        items = FileManagerService.listDirectory(currentPath)
+        items = listDirectory(currentPath)
         buildPathBar()
         tableView.reloadData()
         updateTitle()
@@ -192,7 +192,7 @@ class FileViewController: UIViewController {
         guard let title = sender.title(for: .normal) else { return }
         let cleanTitle = title.hasPrefix("/") ? String(title.dropFirst()) : title
         let fullPath = currentPath + "/" + cleanTitle
-        if FileManagerService.isDirectory(fullPath) {
+        if isDirectory(fullPath) {
             let vc = FileViewController()
             vc.currentPath = fullPath
             navigationController?.pushViewController(vc, animated: true)
@@ -211,7 +211,7 @@ class FileViewController: UIViewController {
         alert.addTextField { $0.placeholder = "Folder name" }
         alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self] _ in
             guard let name = alert.textFields?.first?.text, !name.isEmpty else { return }
-            _ = FileManagerService.createDirectory(named: name, at: self?.currentPath ?? "")
+            self?.createDirectory(named: name, at: self?.currentPath ?? "")
             self?.refreshFiles()
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
@@ -223,7 +223,7 @@ class FileViewController: UIViewController {
         alert.addTextField { $0.placeholder = "File name" }
         alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self] _ in
             guard let name = alert.textFields?.first?.text, !name.isEmpty else { return }
-            _ = FileManagerService.createFile(named: name, at: self?.currentPath ?? "")
+            self?.createFile(named: name, at: self?.currentPath ?? "")
             self?.refreshFiles()
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
@@ -327,12 +327,12 @@ extension FileViewController: UITableViewDelegate, UITableViewDataSource {
         let cell = tableView.dequeueReusableCell(withIdentifier: "c") ?? UITableViewCell(style: .subtitle, reuseIdentifier: "c")
         let name = displayItems[indexPath.row]
         let fullPath = currentPath + "/" + name
-        let isDir = FileManagerService.isDirectory(fullPath)
+        let isDir = isDirectory(fullPath)
 
         cell.textLabel?.text = name
         cell.textLabel?.textColor = .white
         cell.textLabel?.font = .systemFont(ofSize: 14)
-        cell.detailTextLabel?.text = isDir ? "Folder" : FileManagerService.fileSize(at: fullPath)
+        cell.detailTextLabel?.text = isDir ? "Folder" : fileSize(at: fullPath)
         cell.detailTextLabel?.textColor = .gray
         cell.detailTextLabel?.font = .systemFont(ofSize: 11)
         cell.imageView?.image = UIImage(systemName: isDir ? "folder.fill" : "doc.fill")
@@ -345,7 +345,7 @@ extension FileViewController: UITableViewDelegate, UITableViewDataSource {
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         let name = displayItems[indexPath.row]
         let fullPath = currentPath + "/" + name
-        if FileManagerService.isDirectory(fullPath) {
+        if isDirectory(fullPath) {
             let vc = FileViewController()
             vc.currentPath = fullPath
             navigationController?.pushViewController(vc, animated: true)
@@ -393,12 +393,44 @@ extension FileViewController: UIDocumentPickerDelegate {
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         for url in urls {
             guard url.startAccessingSecurityScopedResource() else { continue }
-            let destDir = FileManagerService.destinationDir(for: url.lastPathComponent, currentPath: currentPath)
-            try? FileManager.default.createDirectory(atPath: destDir, withIntermediateDirectories: true)
-            try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: destDir + "/" + url.lastPathComponent))
+            let destPath = currentPath + "/" + url.lastPathComponent
+            try? FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: destPath))
             url.stopAccessingSecurityScopedResource()
         }
         refreshFiles()
+    }
+}
+
+// MARK: - Helper Methods (replacing FileManagerService)
+extension FileViewController {
+    private func listDirectory(_ path: String) -> [String] {
+        return (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+    }
+    
+    private func isDirectory(_ path: String) -> Bool {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        return isDir.boolValue
+    }
+    
+    private func fileSize(at path: String) -> String {
+        do {
+            let attr = try FileManager.default.attributesOfItem(atPath: path)
+            let size = attr[.size] as? Int64 ?? 0
+            return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        } catch {
+            return ""
+        }
+    }
+    
+    private func createDirectory(named name: String, at path: String) {
+        let newDir = path + "/" + name
+        try? FileManager.default.createDirectory(atPath: newDir, withIntermediateDirectories: true)
+    }
+    
+    private func createFile(named name: String, at path: String) {
+        let filePath = path + "/" + name
+        FileManager.default.createFile(atPath: filePath, contents: nil)
     }
 }
 
