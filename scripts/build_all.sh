@@ -19,7 +19,7 @@ trap 'echo -e "${RED}❌ 构建失败，详见日志：$LOG_FILE${NC}"; gzip "$L
 
 # ===================== 基础配置 =====================
 BUILD_TEMP="$ROOT_DIR/BuildTemp"
-LIBS_OUTPUT="$ROOT_DIR/Frameworks"   # 与工作流上传路径一致
+LIBS_OUTPUT="$ROOT_DIR/Frameworks"   # 静态库输出目录
 RESOURCES_OUTPUT="$ROOT_DIR/Resources"
 IPA_OUTPUT="$ROOT_DIR/IPA"
 
@@ -64,7 +64,7 @@ if ! xcrun --version >/dev/null 2>&1; then
     exit 1
 fi
 
-# ===================== 安装 Autotools =====================
+# ===================== 安装 Autotools（libplist 依赖）=====================
 echo -e "${YELLOW}🔧 校验 Autotools 依赖...${NC}"
 if ! command -v libtoolize >/dev/null 2>&1; then
     brew install autoconf automake libtool pkg-config
@@ -113,16 +113,15 @@ make install
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ libplist${NC}"
 
-# ===================== 3. ldid2（修复克隆认证）=====================
-echo -e "\n${YELLOW}📦 [3/5] ldid2${NC}"
+# ===================== 3. ldid2（核心修复：iOS 编译）=====================
+echo -e "\n${YELLOW}📦 [3/5] ldid2（iOS 目标编译）${NC}"
 cd "$BUILD_TEMP"
 
-# 使用官方公开仓库，避免私有仓库认证问题
+# 修复克隆问题：浅克隆 + 重试 + 禁用认证
 LDID2_REPO="https://github.com/ProcursusTeam/ldid2.git"
-
 for i in {1..3}; do
     echo "尝试克隆 ldid2 (第 $i 次)..."
-    if git clone "$LDID2_REPO" ldid2; then
+    if git clone --depth 1 "$LDID2_REPO" ldid2; then
         echo -e "${GREEN}✅ ldid2 克隆成功${NC}"
         break
     else
@@ -136,6 +135,7 @@ for i in {1..3}; do
 done
 
 cd ldid2
+# 编译为 iOS arm64 可执行文件（关键：使用 iphoneos SDK）
 clang++ -std=c++17 \
     -arch arm64 \
     -isysroot "$DEVICE_SDK_PATH" \
@@ -145,12 +145,12 @@ clang++ -std=c++17 \
     -lcrypto \
     -o "$RESOURCES_OUTPUT/ldid2" \
     ldid2.cpp
-echo -e "${GREEN}✅ ldid2${NC}"
+echo -e "${GREEN}✅ ldid2（iOS 版）编译完成${NC}"
 
 # ===================== 4. zsign =====================
 echo -e "\n${YELLOW}📦 [4/5] zsign${NC}"
 cd "$BUILD_TEMP"
-[ -d zsign ] || git clone https://github.com/JayBrown/zsign.git zsign
+[ -d zsign ] || git clone --depth 1 https://github.com/zhlynn/zsign.git zsign
 cd zsign
 clang++ -std=c++11 \
     -arch arm64 \
@@ -163,7 +163,7 @@ clang++ -std=c++11 \
     *.cpp
 echo -e "${GREEN}✅ zsign${NC}"
 
-# ===================== 5. Swift App =====================
+# ===================== 5. Swift App（链接静态库）=====================
 echo -e "\n${YELLOW}📦 [5/5] Swift App${NC}"
 SWIFT_FILES=$(find "$ROOT_DIR" -name "*.swift" ! -path "*/BuildTemp/*")
 [ -z "$SWIFT_FILES" ] && echo -e "${RED}❌ 未找到 Swift 文件${NC}" && exit 1
@@ -209,7 +209,7 @@ EOF
 
 cp "$ENTITLEMENTS_FILE" "$APP_DIR/entitlements.plist"
 
-# ===================== 签名 =====================
+# ===================== 签名（Ad-hoc，适配巨魔）=====================
 if [ -f "$APP_DIR/ldid2" ]; then
     "$APP_DIR/ldid2" -S"$APP_DIR/entitlements.plist" "$APP_DIR/$APP_NAME" 2>/dev/null || \
     echo -e "${YELLOW}⚠️ ldid2 签名失败（无巨魔环境可忽略）${NC}"
