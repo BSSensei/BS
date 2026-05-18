@@ -13,20 +13,17 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
-          persist-credentials: true  # 保留凭据，避免后续克隆失败
+          persist-credentials: true
 
       - name: 安装编译依赖
         run: |
           brew install cmake make git autoconf automake libtool pkg-config
 
-      - name: 修复 Git 认证（核心修复）
+      - name: 修复 Git 认证
         run: |
-          # 禁用所有凭据助手，避免交互式密码提示
           git config --global --unset-all credential.helper || true
-          # 强制使用匿名 HTTPS 克隆（不携带令牌）
-          git config --global url."https://github.com/".insteadOf "https://github.com/"
-          # 禁止终端密码提示
           export GIT_TERMINAL_PROMPT=0
+          git config --global url."https://github.com/".insteadOf "https://github.com/"
 
       - name: 执行构建脚本
         run: |
