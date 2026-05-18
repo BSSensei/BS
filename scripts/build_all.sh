@@ -113,29 +113,28 @@ make install
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ libplist${NC}"
 
-# ===================== 3. ldid2（核心修复：iOS 编译）=====================
-echo -e "\n${YELLOW}📦 [3/5] ldid2（iOS 目标编译）${NC}"
+# ===================== 3. ldid（修正：原 ldid2 不存在）=====================
+echo -e "\n${YELLOW}📦 [3/5] ldid（iOS 目标编译）${NC}"
 cd "$BUILD_TEMP"
 
-# 修复克隆问题：浅克隆 + 重试 + 禁用认证
-LDID2_REPO="https://github.com/ProcursusTeam/ldid2.git"
+LDID_REPO="https://github.com/ProcursusTeam/ldid.git"
 for i in {1..3}; do
-    echo "尝试克隆 ldid2 (第 $i 次)..."
-    if git clone --depth 1 "$LDID2_REPO" ldid2; then
-        echo -e "${GREEN}✅ ldid2 克隆成功${NC}"
+    echo "尝试克隆 ldid (第 $i 次)..."
+    if git clone --depth 1 "$LDID_REPO" ldid; then
+        echo -e "${GREEN}✅ ldid 克隆成功${NC}"
         break
     else
         echo -e "${YELLOW}⚠️ 克隆失败，等待 5 秒后重试...${NC}"
         sleep 5
         if [ $i -eq 3 ]; then
-            echo -e "${RED}❌ ldid2 克隆失败，已达最大重试次数${NC}"
+            echo -e "${RED}❌ ldid 克隆失败，已达最大重试次数${NC}"
             exit 1
         fi
     fi
 done
 
-cd ldid2
-# 编译为 iOS arm64 可执行文件（关键：使用 iphoneos SDK）
+cd ldid
+# 编译为 iOS arm64 可执行文件
 clang++ -std=c++17 \
     -arch arm64 \
     -isysroot "$DEVICE_SDK_PATH" \
@@ -143,9 +142,9 @@ clang++ -std=c++17 \
     -I"$BUILD_TEMP/openssl_install/include" \
     -L"$BUILD_TEMP/openssl_install/lib" \
     -lcrypto \
-    -o "$RESOURCES_OUTPUT/ldid2" \
-    ldid2.cpp
-echo -e "${GREEN}✅ ldid2（iOS 版）编译完成${NC}"
+    -o "$RESOURCES_OUTPUT/ldid" \
+    ldid.cpp
+echo -e "${GREEN}✅ ldid（iOS 版）编译完成${NC}"
 
 # ===================== 4. zsign =====================
 echo -e "\n${YELLOW}📦 [4/5] zsign${NC}"
@@ -184,7 +183,7 @@ xcrun -sdk iphoneos swiftc \
     -o "$APP_DIR/$APP_NAME" \
     $SWIFT_FILES
 
-cp "$RESOURCES_OUTPUT/ldid2" "$APP_DIR/" 2>/dev/null || true
+cp "$RESOURCES_OUTPUT/ldid" "$APP_DIR/" 2>/dev/null || true
 cp "$RESOURCES_OUTPUT/zsign" "$APP_DIR/" 2>/dev/null || true
 chmod +x "$APP_DIR"/* 2>/dev/null || true
 
@@ -210,9 +209,9 @@ EOF
 cp "$ENTITLEMENTS_FILE" "$APP_DIR/entitlements.plist"
 
 # ===================== 签名（Ad-hoc，适配巨魔）=====================
-if [ -f "$APP_DIR/ldid2" ]; then
-    "$APP_DIR/ldid2" -S"$APP_DIR/entitlements.plist" "$APP_DIR/$APP_NAME" 2>/dev/null || \
-    echo -e "${YELLOW}⚠️ ldid2 签名失败（无巨魔环境可忽略）${NC}"
+if [ -f "$APP_DIR/ldid" ]; then
+    "$APP_DIR/ldid" -S"$APP_DIR/entitlements.plist" "$APP_DIR/$APP_NAME" 2>/dev/null || \
+    echo -e "${YELLOW}⚠️ ldid 签名失败（无巨魔环境可忽略）${NC}"
 fi
 
 cd "$BUILD_TEMP"
