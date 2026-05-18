@@ -1,4 +1,4 @@
-name: 库
+name: 构建 iOS 静态库与 IPA
 
 on:
   push:
@@ -17,14 +17,13 @@ jobs:
 
       - name: 安装编译工具和依赖
         run: |
-          # 安装 autotools（libplist 必需）和基础工具
           brew install cmake make git autoconf automake libtool pkg-config
 
-      - name: 配置 Git 认证（解决克隆失败）
+      - name: 配置 Git 认证（解决 ldid2 克隆失败）
         run: |
           git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: 编译所有静态库
+      - name: 编译所有静态库与 App
         run: |
           chmod +x scripts/build_all.sh
           bash scripts/build_all.sh
@@ -33,10 +32,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-static-libs
-          path: Frameworks/  # 与脚本输出路径一致
+          path: Frameworks/
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PermanentStore-IPA
+          path: IPA/
 
       - name: 上传编译日志
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build_log.txt.gz  # 脚本生成的压缩日志
+          path: build_log.txt.gz
