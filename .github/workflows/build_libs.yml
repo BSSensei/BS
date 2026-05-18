@@ -12,10 +12,17 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true  # 保留凭据，避免后续克隆失败
 
-      - name: 安装编译工具
+      - name: 安装编译工具和依赖
         run: |
-          brew install cmake make git
+          # 安装 autotools（libplist 必需）和基础工具
+          brew install cmake make git autoconf automake libtool pkg-config
+
+      - name: 配置 Git 认证（解决克隆失败）
+        run: |
+          git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: 编译所有静态库
         run: |
@@ -26,10 +33,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-static-libs
-          path: Frameworks/
+          path: Frameworks/  # 与脚本输出路径一致
 
       - name: 上传编译日志
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build_log.txt.gz
+          path: build_log.txt.gz  # 脚本生成的压缩日志
