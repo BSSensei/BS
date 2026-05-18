@@ -113,14 +113,19 @@ make install
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ libplist${NC}"
 
-# ===================== 3. ldid（修正：原 ldid2 不存在）=====================
+# ===================== 3. ldid（修复仓库地址）=====================
 echo -e "\n${YELLOW}📦 [3/5] ldid（iOS 目标编译）${NC}"
 cd "$BUILD_TEMP"
 
+# 正确仓库地址：ProcursusTeam/ldid（无 2 后缀）
 LDID_REPO="https://github.com/ProcursusTeam/ldid.git"
+CLONE_DIR="ldid"
+
 for i in {1..3}; do
     echo "尝试克隆 ldid (第 $i 次)..."
-    if git clone --depth 1 "$LDID_REPO" ldid; then
+    # 清除之前可能的残留目录
+    rm -rf "$CLONE_DIR"
+    if git clone --depth 1 "$LDID_REPO" "$CLONE_DIR"; then
         echo -e "${GREEN}✅ ldid 克隆成功${NC}"
         break
     else
@@ -133,15 +138,17 @@ for i in {1..3}; do
     fi
 done
 
-cd ldid
-# 编译为 iOS arm64 可执行文件
+cd "$CLONE_DIR"
+# 关键修复：包含 libplist 头文件和库路径
 clang++ -std=c++17 \
     -arch arm64 \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="$MIN_IOS_VERSION" \
     -I"$BUILD_TEMP/openssl_install/include" \
-    -L"$BUILD_TEMP/openssl_install/lib" \
+    -I"$BUILD_TEMP/libplist_install/include" \  # 必须包含 plist 头文件
+    -L"$BUILD_TEMP/libplist_install/lib" \       # 必须包含 plist 库路径
     -lcrypto \
+    -lplist-2.0 \                             # 链接 plist 静态库
     -o "$RESOURCES_OUTPUT/ldid" \
     ldid.cpp
 echo -e "${GREEN}✅ ldid（iOS 版）编译完成${NC}"
@@ -156,13 +163,15 @@ clang++ -std=c++11 \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="$MIN_IOS_VERSION" \
     -I"$BUILD_TEMP/openssl_install/include" \
+    -I"$BUILD_TEMP/libplist_install/include" \  # 包含 plist 头文件
     -L"$BUILD_TEMP/openssl_install/lib" \
-    -lcrypto -lssl \
+    -L"$BUILD_TEMP/libplist_install/lib" \       # 包含 plist 库路径
+    -lcrypto -lssl -lplist-2.0 \               # 链接 plist 静态库
     -o "$RESOURCES_OUTPUT/zsign" \
     *.cpp
 echo -e "${GREEN}✅ zsign${NC}"
 
-# ===================== 5. Swift App（链接静态库）=====================
+# ===================== 5. Swift App =====================
 echo -e "\n${YELLOW}📦 [5/5] Swift App${NC}"
 SWIFT_FILES=$(find "$ROOT_DIR" -name "*.swift" ! -path "*/BuildTemp/*")
 [ -z "$SWIFT_FILES" ] && echo -e "${RED}❌ 未找到 Swift 文件${NC}" && exit 1
