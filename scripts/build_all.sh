@@ -8,7 +8,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-trap 'echo -e "${RED}❌ 构建失败，退出码: $?${NC}"' ERR
+# ===================== 日志系统 =====================
+LOG_FILE="$ROOT_DIR/build_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -i "$LOG_FILE")
+exec 2>&1
+
+trap 'echo -e "${RED}❌ 构建失败，详见日志：$LOG_FILE${NC}"' ERR
 
 # ===================== 基础配置 =====================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,17 +35,12 @@ BUILD_NUM="1"
 CPU_CORES=$(sysctl -n hw.ncpu)
 [ "$CPU_CORES" -gt 4 ] && CPU_CORES=4
 
-# ===================== 环境检测 =====================
-echo -e "${BLUE}🔍 检测构建环境...${NC}"
-if ! xcrun --version >/dev/null 2>&1; then
-    echo -e "${RED}❌ 未检测到 Xcode 工具链${NC}"
-    exit 1
-fi
-
 # ===================== Entitlements =====================
 ENTITLEMENTS_FILE="$ROOT_DIR/entitlements.plist"
+
 if [ ! -f "$ENTITLEMENTS_FILE" ]; then
-cat > "$ENTITLEMENTS_FILE" << 'EOF'
+    echo -e "${YELLOW}⚠️ 未找到自定义 entitlements.plist，使用默认配置${NC}"
+    cat > "$ENTITLEMENTS_FILE" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -54,10 +54,20 @@ cat > "$ENTITLEMENTS_FILE" << 'EOF'
 </dict>
 </plist>
 EOF
+else
+    echo -e "${GREEN}✅ 使用自定义 entitlements.plist：$ENTITLEMENTS_FILE${NC}"
+fi
+
+# ===================== 环境检测 =====================
+echo -e "${BLUE}🔍 检测构建环境...${NC}"
+if ! xcrun --version >/dev/null 2>&1; then
+    echo -e "${RED}❌ 未检测到 Xcode 工具链${NC}"
+    exit 1
 fi
 
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  PermanentStore 静态库构建（巨魔 / 无巨魔兼容）${NC}"
+echo -e "${BLUE}  PermanentStore 构建（日志已启用）${NC}"
+echo -e "${BLUE}  日志文件：$LOG_FILE${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # ===================== 1. OpenSSL =====================
@@ -176,12 +186,20 @@ EOF
 
 cp "$ENTITLEMENTS_FILE" "$APP_DIR/entitlements.plist"
 
-# ===================== 巨魔 / 无巨魔适配 =====================
+# ===================== 签名 =====================
 if [ -f "$APP_DIR/ldid2" ]; then
     "$APP_DIR/ldid2" -S"$APP_DIR/entitlements.plist" "$APP_DIR/$APP_NAME" 2>/dev/null || \
     echo -e "${YELLOW}⚠️ ldid2 签名失败（无巨魔环境可忽略）${NC}"
 fi
 
 cd "$BUILD_TEMP"
-zip -qr "$IPA_OUTPUT/${APP_NAME}_${VERSION}.ipa" Payload
-echo -e "${GREEN}✅ IPA 已生成：$IPA_OUTPUT/${APP_NAME}_${VERSION}.ipa${NC}"
+IPA_PATH="$IPA_OUTPUT/${APP_NAME}_${VERSION}.ipa"
+zip -qr "$IPA_PATH" Payload
+
+# ===================== 完成 =====================
+echo -e "\n${GREEN}============================================================${NC}"
+echo -e "${GREEN}  构建完成 ✅${NC}"
+echo -e "${GREEN}============================================================${NC}"
+echo -e "${BLUE}📦 IPA 文件：$IPA_PATH${NC}"
+echo -e "${BLUE}📄 构建日志：$LOG_FILE${NC}"
+echo -e "${YELLOW}💡 可直接下载日志文件查看详细构建过程${NC}"
