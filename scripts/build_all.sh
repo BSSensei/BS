@@ -9,16 +9,16 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ===================== 日志系统 =====================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$SCRIPT_DIR"
 LOG_FILE="$ROOT_DIR/build_$(date +%Y%m%d_%H%M%S).log"
+
 exec > >(tee -i "$LOG_FILE")
 exec 2>&1
 
 trap 'echo -e "${RED}❌ 构建失败，详见日志：$LOG_FILE${NC}"' ERR
 
 # ===================== 基础配置 =====================
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$SCRIPT_DIR"
-
 BUILD_TEMP="$ROOT_DIR/BuildTemp"
 LIBS_OUTPUT="$ROOT_DIR/Libraries"
 RESOURCES_OUTPUT="$ROOT_DIR/Resources"
@@ -55,13 +55,25 @@ if [ ! -f "$ENTITLEMENTS_FILE" ]; then
 </plist>
 EOF
 else
-    echo -e "${GREEN}✅ 使用自定义 entitlements.plist：$ENTITLEMENTS_FILE${NC}"
+    echo -e "${GREEN}✅ 使用 GitHub 根目录 entitlements.plist${NC}"
 fi
 
 # ===================== 环境检测 =====================
 echo -e "${BLUE}🔍 检测构建环境...${NC}"
 if ! xcrun --version >/dev/null 2>&1; then
     echo -e "${RED}❌ 未检测到 Xcode 工具链${NC}"
+    exit 1
+fi
+
+# ===================== 安装 Autotools（关键修复）=====================
+echo -e "${YELLOW}🔧 安装 Autotools 依赖...${NC}"
+if command -v brew >/dev/null 2>&1; then
+    brew install automake autoconf libtool pkg-config
+elif command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y autoconf automake libtool pkg-config
+else
+    echo -e "${RED}❌ 无法自动安装 Autotools，请手动安装${NC}"
     exit 1
 fi
 
@@ -87,7 +99,7 @@ cp "$BUILD_TEMP/openssl_install/lib/libcrypto.a" "$LIBS_OUTPUT/"
 cp "$BUILD_TEMP/openssl_install/lib/libssl.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ OpenSSL${NC}"
 
-# ===================== 2. libplist =====================
+# ===================== 2. libplist（已修复）=====================
 echo -e "\n${YELLOW}📦 [2/5] libplist${NC}"
 cd "$BUILD_TEMP"
 [ -d libplist ] || git clone --depth 1 https://github.com/libimobiledevice/libplist.git libplist
