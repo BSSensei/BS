@@ -19,7 +19,7 @@ trap 'echo -e "${RED}❌ 构建失败，详见日志：$LOG_FILE${NC}"; gzip "$L
 
 # ===================== 基础配置 =====================
 BUILD_TEMP="$ROOT_DIR/BuildTemp"
-LIBS_OUTPUT="$ROOT_DIR/Frameworks"  # 匹配 Workflow 上传路径
+LIBS_OUTPUT="$ROOT_DIR/Frameworks"   # 与工作流上传路径一致
 RESOURCES_OUTPUT="$ROOT_DIR/Resources"
 IPA_OUTPUT="$ROOT_DIR/IPA"
 
@@ -64,7 +64,7 @@ if ! xcrun --version >/dev/null 2>&1; then
     exit 1
 fi
 
-# ===================== 安装 Autotools（libplist 依赖）=====================
+# ===================== 安装 Autotools =====================
 echo -e "${YELLOW}🔧 校验 Autotools 依赖...${NC}"
 if ! command -v libtoolize >/dev/null 2>&1; then
     brew install autoconf automake libtool pkg-config
@@ -92,7 +92,7 @@ cp "$BUILD_TEMP/openssl_install/lib/libcrypto.a" "$LIBS_OUTPUT/"
 cp "$BUILD_TEMP/openssl_install/lib/libssl.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ OpenSSL${NC}"
 
-# ===================== 2. libplist（修复 Autotools 问题）=====================
+# ===================== 2. libplist =====================
 echo -e "\n${YELLOW}📦 [2/5] libplist${NC}"
 cd "$BUILD_TEMP"
 [ -d libplist ] || git clone --depth 1 https://github.com/libimobiledevice/libplist.git libplist
@@ -116,10 +116,13 @@ echo -e "${GREEN}✅ libplist${NC}"
 # ===================== 3. ldid2（修复克隆认证）=====================
 echo -e "\n${YELLOW}📦 [3/5] ldid2${NC}"
 cd "$BUILD_TEMP"
-# 重试机制避免网络波动
+
+# 使用官方公开仓库，避免私有仓库认证问题
+LDID2_REPO="https://github.com/ProcursusTeam/ldid2.git"
+
 for i in {1..3}; do
     echo "尝试克隆 ldid2 (第 $i 次)..."
-    if git clone https://github.com/ProcursusTeam/ldid2.git ldid2; then
+    if git clone "$LDID2_REPO" ldid2; then
         echo -e "${GREEN}✅ ldid2 克隆成功${NC}"
         break
     else
@@ -221,8 +224,8 @@ echo -e "\n${GREEN}============================================================$
 echo -e "${GREEN}  构建完成 ✅${NC}"
 echo -e "${GREEN}============================================================${NC}"
 echo -e "${BLUE}📦 静态库路径：$LIBS_OUTPUT${NC}"
+echo -e "${BLUE}📦 IPA 路径：$IPA_PATH${NC}"
 echo -e "${BLUE}📄 构建日志：$LOG_FILE${NC}"
-echo -e "${YELLOW}💡 可直接下载日志文件查看详细构建过程${NC}"
 
-# 压缩日志方便上传
+# 压缩日志以便上传
 gzip "$LOG_FILE"
