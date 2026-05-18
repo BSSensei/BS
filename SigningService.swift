@@ -15,10 +15,9 @@ class SigningService {
         var ipaPath: String?
 
         // ---- 证书相关 ----
-        var certPath: String?
-        var keyPath: String?
-        var certPassword: String = "troll"
-        var provPath: String?
+        var certPath: String?      // 指向 .p12 或 .pem 的路径
+        var certPassword: String = "troll" // p12 密码
+        var provPath: String?      // 描述文件 .mobileprovision (zsign 专用)
 
         // ---- Entitlements ----
         var entitlementContent: String?
@@ -65,31 +64,73 @@ class SigningService {
         switch config.engine {
         case .ldid2:
             cmd = "ldid2"
+            
+            // 1. 处理 Entitlements
             if let ent = entPath { cmd += " -S\(ent)" }
+            
+            // 2. 处理签名模式
             if config.mode == .adhoc {
+                // ldid2 的伪签名模式（如果需要 TeamID 可以用 -K 参数，但通常伪签不需要）
                 if !config.teamID.isEmpty { cmd += " -K\(config.teamID)" }
             } else {
-                guard let cert = config.certPath else { return false }
-                cmd += " -C\(cert) -p\(config.certPassword)"
+                // 真签名模式：必须使用 p12 证书
+                guard let cert = config.certPath, !cert.isEmpty else { 
+                    print("PermanentStore: ldid2 真签名缺少证书路径")
+                    return false 
+                }
+                // 检查文件是否存在
+                if !FileManager.default.fileExists(atPath: cert) {
+                    print("PermanentStore: 证书文件不存在: \(cert)")
+                    return false
+                }
+                
+                // ✅ 关键修正：使用 -K 指定 p12 文件，-U 指定密码
+                cmd += " -K \(cert)"
+                if !config.certPassword.isEmpty {
+                    cmd += " -U \(config.certPassword)"
+                }
             }
             cmd += " \(binaryPath)"
 
         case .zsign:
             cmd = "zsign"
+            
+            // 1. 处理 Entitlements
             if let ent = entPath { cmd += " -e \(ent)" }
+            
+            // 2. 处理签名模式
             if config.mode == .adhoc {
-                cmd += " -a"
+                cmd += " -a" // zsign 的 ad-hoc 模式
             } else {
-                guard let cert = config.certPath else { return false }
+                // 真签名模式
+                guard let cert = config.certPath, !cert.isEmpty else { 
+                    print("PermanentStore: zsign 真签名缺少证书路径")
+                    return false 
+                }
+                if !FileManager.default.fileExists(atPath: cert) {
+                    print("PermanentStore: 证书文件不存在: \(cert)")
+                    return false
+                }
+                
+                // zsign 使用 -k 指定 p12, -p 指定密码
                 cmd += " -k \(cert) -p \(config.certPassword)"
-                if let prov = config.provPath, !prov.isEmpty { cmd += " -m \(prov)" }
+                
+                // 如果有描述文件
+                if let prov = config.provPath, !prov.isEmpty {
+                    if FileManager.default.fileExists(atPath: prov) {
+                        cmd += " -m \(prov)"
+                    }
+                }
             }
             cmd += " \(binaryPath)"
         }
 
+        print("PermanentStore: 执行签名命令 -> \(cmd)")
         let output = RootHelper.execute(cmd)
         print("PermanentStore: 签名命令输出: \(output)")
-        return !output.contains("error") && !output.contains("Error")
+        
+        // 简单的成功判断：不包含 error 或 Error
+        return !output.lowercased().contains("error") && !output.lowercased().contains("failed")
     }
 
     // MARK: - 完整 IPA 签名流程
@@ -131,6 +172,7 @@ class SigningService {
         if let custom = config.entitlementContent, !custom.isEmpty {
             return custom
         }
+        // 如果没有自定义 Entitlements，但开启了平台应用或填写了 TeamID，则自动生成
         if config.platformApp || !config.teamID.isEmpty {
             var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n"
             if config.platformApp { xml += "\t<key>platform-application</key>\n\t<true/>\n" }
