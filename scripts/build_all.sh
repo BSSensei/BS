@@ -11,16 +11,15 @@ NC='\033[0m'
 # ===================== 日志系统 =====================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$SCRIPT_DIR"
-LOG_FILE="$ROOT_DIR/build_$(date +%Y%m%d_%H%M%S).log"
-
+LOG_FILE="$ROOT_DIR/build_log.txt"
 exec > >(tee -i "$LOG_FILE")
 exec 2>&1
 
-trap 'echo -e "${RED}❌ 构建失败，详见日志：$LOG_FILE${NC}"' ERR
+trap 'echo -e "${RED}❌ 构建失败，详见日志：$LOG_FILE${NC}"; gzip "$LOG_FILE"' ERR
 
 # ===================== 基础配置 =====================
 BUILD_TEMP="$ROOT_DIR/BuildTemp"
-LIBS_OUTPUT="$ROOT_DIR/Libraries"
+LIBS_OUTPUT="$ROOT_DIR/Frameworks"  # 匹配 Workflow 上传路径
 RESOURCES_OUTPUT="$ROOT_DIR/Resources"
 IPA_OUTPUT="$ROOT_DIR/IPA"
 
@@ -65,16 +64,10 @@ if ! xcrun --version >/dev/null 2>&1; then
     exit 1
 fi
 
-# ===================== 安装 Autotools（关键修复）=====================
-echo -e "${YELLOW}🔧 安装 Autotools 依赖...${NC}"
-if command -v brew >/dev/null 2>&1; then
-    brew install automake autoconf libtool pkg-config
-elif command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y autoconf automake libtool pkg-config
-else
-    echo -e "${RED}❌ 无法自动安装 Autotools，请手动安装${NC}"
-    exit 1
+# ===================== 安装 Autotools（libplist 依赖）=====================
+echo -e "${YELLOW}🔧 校验 Autotools 依赖...${NC}"
+if ! command -v libtoolize >/dev/null 2>&1; then
+    brew install autoconf automake libtool pkg-config
 fi
 
 echo -e "${BLUE}============================================================${NC}"
@@ -99,7 +92,7 @@ cp "$BUILD_TEMP/openssl_install/lib/libcrypto.a" "$LIBS_OUTPUT/"
 cp "$BUILD_TEMP/openssl_install/lib/libssl.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ OpenSSL${NC}"
 
-# ===================== 2. libplist（已修复）=====================
+# ===================== 2. libplist（修复 Autotools 问题）=====================
 echo -e "\n${YELLOW}📦 [2/5] libplist${NC}"
 cd "$BUILD_TEMP"
 [ -d libplist ] || git clone --depth 1 https://github.com/libimobiledevice/libplist.git libplist
@@ -120,10 +113,25 @@ make install
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ libplist${NC}"
 
-# ===================== 3. ldid2 =====================
+# ===================== 3. ldid2（修复克隆认证）=====================
 echo -e "\n${YELLOW}📦 [3/5] ldid2${NC}"
 cd "$BUILD_TEMP"
-[ -d ldid2 ] || git clone https://github.com/ProcursusTeam/ldid2.git ldid2
+# 重试机制避免网络波动
+for i in {1..3}; do
+    echo "尝试克隆 ldid2 (第 $i 次)..."
+    if git clone https://github.com/ProcursusTeam/ldid2.git ldid2; then
+        echo -e "${GREEN}✅ ldid2 克隆成功${NC}"
+        break
+    else
+        echo -e "${YELLOW}⚠️ 克隆失败，等待 5 秒后重试...${NC}"
+        sleep 5
+        if [ $i -eq 3 ]; then
+            echo -e "${RED}❌ ldid2 克隆失败，已达最大重试次数${NC}"
+            exit 1
+        fi
+    fi
+done
+
 cd ldid2
 clang++ -std=c++17 \
     -arch arm64 \
@@ -153,7 +161,7 @@ clang++ -std=c++11 \
 echo -e "${GREEN}✅ zsign${NC}"
 
 # ===================== 5. Swift App =====================
-echo -e "\n${YELLOW}📱 [5/5] Swift App${NC}"
+echo -e "\n${YELLOW}📦 [5/5] Swift App${NC}"
 SWIFT_FILES=$(find "$ROOT_DIR" -name "*.swift" ! -path "*/BuildTemp/*")
 [ -z "$SWIFT_FILES" ] && echo -e "${RED}❌ 未找到 Swift 文件${NC}" && exit 1
 
@@ -212,6 +220,9 @@ zip -qr "$IPA_PATH" Payload
 echo -e "\n${GREEN}============================================================${NC}"
 echo -e "${GREEN}  构建完成 ✅${NC}"
 echo -e "${GREEN}============================================================${NC}"
-echo -e "${BLUE}📦 IPA 文件：$IPA_PATH${NC}"
+echo -e "${BLUE}📦 静态库路径：$LIBS_OUTPUT${NC}"
 echo -e "${BLUE}📄 构建日志：$LOG_FILE${NC}"
 echo -e "${YELLOW}💡 可直接下载日志文件查看详细构建过程${NC}"
+
+# 压缩日志方便上传
+gzip "$LOG_FILE"
