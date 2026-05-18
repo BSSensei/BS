@@ -1,4 +1,4 @@
-name: 构建 iOS 静态库与 IPA
+name: 构建 iOS 静态库与 IPA（含 ldid2）
 
 on:
   push:
@@ -15,15 +15,20 @@ jobs:
         with:
           persist-credentials: true  # 保留凭据，避免后续克隆失败
 
-      - name: 安装编译工具和依赖
+      - name: 安装编译依赖
         run: |
           brew install cmake make git autoconf automake libtool pkg-config
 
-      - name: 配置 Git 认证（解决 ldid2 克隆失败）
+      - name: 修复 Git 认证（核心修复）
         run: |
-          git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          # 禁用所有凭据助手，避免交互式密码提示
+          git config --global --unset-all credential.helper || true
+          # 强制使用匿名 HTTPS 克隆（不携带令牌）
+          git config --global url."https://github.com/".insteadOf "https://github.com/"
+          # 禁止终端密码提示
+          export GIT_TERMINAL_PROMPT=0
 
-      - name: 编译所有静态库与 App
+      - name: 执行构建脚本
         run: |
           chmod +x scripts/build_all.sh
           bash scripts/build_all.sh
@@ -40,7 +45,7 @@ jobs:
           name: PermanentStore-IPA
           path: IPA/
 
-      - name: 上传编译日志
+      - name: 上传构建日志
         uses: actions/upload-artifact@v4
         with:
           name: build-log
