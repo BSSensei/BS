@@ -1,0 +1,17 @@
+diff --git a/ldid.cpp b/ldid.cpp
+index 0a1b2c3..4d5e6f7 100644
+--- a/ldid.cpp
++++ b/ldid.cpp
+@@ -65,6 +65,12 @@
+ #include <openssl/evp.h>
+ #include <openssl/pem.h>
+ #include <openssl/x509.h>
++#include <openssl/x509v3.h>  // 新增：OpenSSL 3.x 需显式包含
++#include <openssl/asn1.h>    // 新增：结构体定义依赖
++#include <openssl/asn1t.h>   // 新增：ASN.1 编码支持
++#include <openssl/conf.h>    // 新增：配置函数依赖
++
++#define OPENSSL_API_COMPAT 0x10100000L  // 兼容 OpenSSL 1.1+ API
++#define HAVE_OPENSSL 1                  // 告知 ldid 使用 OpenSSL
+ 
+ #include <plist/plist.h>
