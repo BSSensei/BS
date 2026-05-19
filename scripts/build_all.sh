@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail  # 严格模式：未定义变量报错、命令失败退出、管道错误捕获
 
-# ===================== 颜色 =====================
+# ===================== 颜色定义 =====================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -17,17 +17,13 @@ exec 2>&1
 
 trap 'echo -e "${RED}❌ 构建失败，详见日志：$LOG_FILE${NC}"; gzip "$LOG_FILE"' ERR
 
-# ===================== 基础配置（防空变量）=====================
-BUILD_TEMP="${ROOT_DIR}/BuildTemp"
-LIBS_OUTPUT="${ROOT_DIR}/Frameworks"
-RESOURCES_OUTPUT="${ROOT_DIR}/Resources"
-IPA_OUTPUT="${ROOT_DIR}/IPA"
+# ===================== 基础配置 =====================
+BUILD_TEMP="$ROOT_DIR/BuildTemp"
+LIBS_OUTPUT="$ROOT_DIR/Frameworks"
+RESOURCES_OUTPUT="$ROOT_DIR/Resources"
+IPA_OUTPUT="$ROOT_DIR/IPA"
 
-# 检查关键目录是否存在
-mkdir -p "$BUILD_TEMP" "$LIBS_OUTPUT" "$RESOURCES_OUTPUT" "$IPA_OUTPUT" || {
-  echo -e "${RED}❌ 无法创建构建目录${NC}"
-  exit 1
-}
+mkdir -p "$BUILD_TEMP" "$LIBS_OUTPUT" "$RESOURCES_OUTPUT" "$IPA_OUTPUT"
 
 # 获取 iOS SDK 路径（防空）
 DEVICE_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
@@ -78,7 +74,7 @@ if ! command -v libtoolize >/dev/null 2>&1; then
 fi
 
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  PermanentStore 完整构建（日志已启用）${NC}"
+echo -e "${BLUE}  PermanentStore 完整构建（含 ldid 补丁）${NC}"
 echo -e "${BLUE}  日志文件：$LOG_FILE${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
@@ -121,13 +117,14 @@ make install
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ libplist 静态库构建完成${NC}"
 
-# ===================== 3. ldid（iOS 交叉编译）=====================
+# ===================== 3. ldid（iOS 目标编译 · 补丁修复版）=====================
 echo -e "\n${YELLOW}📦 [3/5] ldid（iOS 目标编译）${NC}"
 cd "$BUILD_TEMP" || exit 1
 
 LDID_REPO="https://github.com/ProcursusTeam/ldid.git"
 CLONE_DIR="ldid"
 
+# 克隆仓库
 rm -rf "$CLONE_DIR"
 git clone --depth 1 "$LDID_REPO" "$CLONE_DIR" || {
   echo -e "${RED}❌ ldid 克隆失败${NC}"
@@ -136,19 +133,27 @@ git clone --depth 1 "$LDID_REPO" "$CLONE_DIR" || {
 
 cd "$CLONE_DIR" || exit 1
 
-# 检查源文件是否存在
-if [ ! -f "ldid.cpp" ]; then
-  echo -e "${RED}❌ 未找到 ldid.cpp 源文件${NC}"
+# ===================== 应用补丁（关键步骤）=====================
+echo -e "${BLUE}🔧 应用 OpenSSL 头文件补丁...${NC}"
+PATCH_FILE="$SCRIPT_DIR/ldid_openssl_fix.patch"  # 补丁文件路径（脚本所在目录）
+
+if [ ! -f "$PATCH_FILE" ]; then
+  echo -e "${RED}❌ 未找到补丁文件：$PATCH_FILE${NC}"
   exit 1
 fi
 
-# 检查 libplist 头文件是否存在
-if [ ! -f "$BUILD_TEMP/libplist_install/include/plist/plist.h" ]; then
-  echo -e "${RED}❌ 未找到 plist/plist.h 头文件${NC}"
+patch -p1 < "$PATCH_FILE" || {
+  echo -e "${RED}❌ 补丁应用失败${NC}"
+  exit 1
+}
+
+# 验证补丁是否生效
+if ! grep -q "#include <openssl/x509v3.h>" ldid.cpp; then
+  echo -e "${RED}❌ 补丁未正确应用${NC}"
   exit 1
 fi
 
-# 编译 ldid（修复头文件路径和库链接）
+# ===================== 编译 ldid =====================
 clang++ -std=c++17 \
   -arch arm64 \
   -isysroot "$DEVICE_SDK_PATH" \
@@ -157,12 +162,14 @@ clang++ -std=c++17 \
   -I"$BUILD_TEMP/libplist_install/include" \
   -L"$BUILD_TEMP/openssl_install/lib" \
   -L"$BUILD_TEMP/libplist_install/lib" \
-  -lcrypto \
-  -lplist-2.0 \
+  -DHAVE_OPENSSL=1 \
+  -DLDID_VERSION=\"v2.1.5\" \
   -o "$RESOURCES_OUTPUT/ldid" \
-  ldid.cpp
+  ldid.cpp \
+  -lcrypto -lssl \
+  -framework Foundation -framework Security
 
-echo -e "${GREEN}✅ ldid（iOS 版）编译完成${NC}"
+echo -e "${GREEN}✅ ldid（补丁修复版）编译完成${NC}"
 
 # ===================== 4. zsign（iOS 交叉编译）=====================
 echo -e "\n${YELLOW}📦 [4/5] zsign${NC}"
