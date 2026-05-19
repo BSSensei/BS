@@ -64,7 +64,7 @@ if ! xcrun --version >/dev/null 2>&1; then
     exit 1
 fi
 
-# ===================== 安装 Autotools（libplist 依赖）=====================
+# ===================== 安装 Autotools =====================
 echo -e "${YELLOW}🔧 校验 Autotools 依赖...${NC}"
 if ! command -v libtoolize >/dev/null 2>&1; then
     brew install autoconf automake libtool pkg-config
@@ -113,7 +113,7 @@ make install
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ libplist${NC}"
 
-# ===================== 3. ldid（iOS 目标编译）=====================
+# ===================== 3. ldid（修复头文件路径）=====================
 echo -e "\n${YELLOW}📦 [3/5] ldid（iOS 目标编译）${NC}"
 cd "$BUILD_TEMP"
 
@@ -144,14 +144,25 @@ if [ ! -f "ldid.cpp" ]; then
     exit 1
 fi
 
-# 编译 ldid（仅依赖 OpenSSL，无多余参数）
+# 验证 libplist 头文件存在
+if [ ! -f "$BUILD_TEMP/libplist_install/include/plist/plist.h" ]; then
+    echo -e "${RED}❌ 未找到 plist/plist.h 头文件${NC}"
+    echo -e "${RED}期望路径：$BUILD_TEMP/libplist_install/include/plist/plist.h${NC}"
+    exit 1
+fi
+
+# 编译 ldid（关键修复：添加 libplist 头文件路径和库链接）
+echo -e "${BLUE}🔧 编译 ldid，包含 libplist 头文件...${NC}"
 clang++ -std=c++17 \
     -arch arm64 \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="$MIN_IOS_VERSION" \
     -I"$BUILD_TEMP/openssl_install/include" \
+    -I"$BUILD_TEMP/libplist_install/include" \  # 修复：添加 plist 头文件路径
     -L"$BUILD_TEMP/openssl_install/lib" \
+    -L"$BUILD_TEMP/libplist_install/lib" \       # 修复：添加 plist 库路径
     -lcrypto \
+    -lplist-2.0 \                             # 修复：链接 plist 库
     -o "$RESOURCES_OUTPUT/ldid" \
     ldid.cpp
 
@@ -167,10 +178,10 @@ clang++ -std=c++11 \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="$MIN_IOS_VERSION" \
     -I"$BUILD_TEMP/openssl_install/include" \
-    -I"$BUILD_TEMP/libplist_install/include" \
+    -I"$BUILD_TEMP/libplist_install/include" \  # 包含 plist 头文件
     -L"$BUILD_TEMP/openssl_install/lib" \
-    -L"$BUILD_TEMP/libplist_install/lib" \
-    -lcrypto -lssl -lplist-2.0 \
+    -L"$BUILD_TEMP/libplist_install/lib" \       # 包含 plist 库路径
+    -lcrypto -lssl -lplist-2.0 \               # 链接 plist 库
     -o "$RESOURCES_OUTPUT/zsign" \
     *.cpp
 echo -e "${GREEN}✅ zsign${NC}"
