@@ -10,7 +10,10 @@ NC='\033[0m'
 
 # ===================== 日志系统 =====================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$SCRIPT_DIR"
+# 关键修复：定位到仓库根目录（脚本在 scripts/ 子目录中）
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$REPO_ROOT"
+
 LOG_FILE="$ROOT_DIR/build_log.txt"
 exec > >(tee -i "$LOG_FILE")
 exec 2>&1
@@ -40,11 +43,12 @@ ICON_FILE="$ROOT_DIR/Icon.png"
 ENTITLEMENTS_FILE="$ROOT_DIR/entitlements.plist"
 
 # 验证必需文件
-[ ! -f "$INFO_PLIST" ] && echo -e "${RED}❌ 未找到 Info.plist${NC}" && exit 1
+[ ! -f "$INFO_PLIST" ] && echo -e "${RED}❌ 未找到 Info.plist（期望位置：$INFO_PLIST）${NC}" && exit 1
 [ ! -f "$ICON_FILE" ] && echo -e "${YELLOW}⚠️ 未找到 Icon.png，将继续构建${NC}"
 [ ! -f "$ENTITLEMENTS_FILE" ] && echo -e "${RED}❌ 未找到 entitlements.plist${NC}" && exit 1
 
 echo -e "${GREEN}✅ 使用 GitHub 根目录配置文件${NC}"
+echo -e "${BLUE}📁 仓库根目录：$ROOT_DIR${NC}"
 
 # ===================== 环境检测 =====================
 echo -e "${BLUE}🔍 检测构建环境...${NC}"
@@ -166,7 +170,7 @@ echo -e "${GREEN}✅ zsign${NC}"
 
 # ===================== 5. Swift App =====================
 echo -e "\n${YELLOW}📦 [5/5] Swift App${NC}"
-SWIFT_FILES=$(find "$ROOT_DIR" -name "*.swift" ! -path "*/BuildTemp/*")
+SWIFT_FILES=$(find "$ROOT_DIR" -name "*.swift" ! -path "*/BuildTemp/*" ! -path "*/.git/*")
 [ -z "$SWIFT_FILES" ] && echo -e "${RED}❌ 未找到 Swift 文件${NC}" && exit 1
 
 APP_DIR="$BUILD_TEMP/Payload/$APP_NAME.app"
