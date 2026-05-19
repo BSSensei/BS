@@ -49,4 +49,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build_log.txt.gz
+          path: scripts/build_log.txt.gz  # 修正路径：日志实际生成在 scripts/ 目录下
