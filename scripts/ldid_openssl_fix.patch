@@ -100,7 +100,7 @@ index 7e6f5d4..8a9b0c1 100644
          // 选择最佳名称
          if (!team.empty())
              identity->name = team;
-@@ -3076,7 +3100,7 @@ static void sign_constraints(FILE *file, std::streambuf &stream, const std::vec<
+@@ -3076,7 +3100,7 @@ static void sign_constraints(FILE *file, std::streambuf &stream, const std::vect
          std::vector<std::pair<size_t, size_t>> matches_;
          for (auto flag : flags)
              if (regexec(&flag.second.first, begin, matches_.size(), nullptr, 0) == 0)
