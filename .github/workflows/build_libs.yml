@@ -29,24 +29,29 @@ jobs:
           git config --global url."https://github.com/".insteadOf "https://github.com/"
 
       - name: 执行构建脚本
+        id: build
         run: |
           chmod +x scripts/build_all.sh
           bash scripts/build_all.sh
+        continue-on-error: true  # 允许构建失败，继续执行后续步骤
 
-      - name: 上传静态库
+      - name: 上传静态库（仅成功时）
+        if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ios-static-libs
           path: Frameworks/
 
-      - name: 上传 IPA
+      - name: 上传 IPA（仅成功时）
+        if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: PermanentStore-IPA
           path: IPA/
 
-      - name: 上传构建日志
+      - name: 上传构建日志（无论成败都执行）
+        if: always()  # 关键：强制运行，不管前面步骤是否失败
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: scripts/build_log.txt.gz  # 修正路径：日志实际生成在 scripts/ 目录下
+          path: scripts/build_log.txt.gz  # 匹配脚本生成的日志路径
