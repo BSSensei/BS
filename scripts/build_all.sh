@@ -8,10 +8,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# ===================== 路径配置（修正为仓库根目录）=====================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"  # scripts目录
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"                          # 仓库根目录（entitlements/Info.plist/Icon.png所在位置）
+LOG_FILE="$ROOT_DIR/build_log.txt"                             # 日志输出到根目录
+
 # ===================== 日志系统 =====================
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$SCRIPT_DIR"
-LOG_FILE="$ROOT_DIR/build_log.txt"
 exec > >(tee -i "$LOG_FILE")
 exec 2>&1
 
@@ -40,25 +42,36 @@ BUILD_NUM="1"
 CPU_CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 [ "$CPU_CORES" -gt 4 ] && CPU_CORES=4
 
-# ===================== Entitlements =====================
-ENTITLEMENTS_FILE="$ROOT_DIR/entitlements.plist"
-if [ ! -f "$ENTITLEMENTS_FILE" ]; then
-  echo -e "${YELLOW}⚠️ 未找到自定义 entitlements.plist，使用默认配置${NC}"
-  cat > "$ENTITLEMENTS_FILE" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>platform-application</key>
-    <true/>
-    <key>com.apple.private.skip-library-validation</key>
-    <true/>
-    <key>com.apple.private.security.no-container</key>
-    <true/>
-</dict>
-</plist>
-EOF
+# ===================== 全目录搜索关键文件（排除构建目录）=====================
+search_file() {
+    local filename="$1"
+    find "$ROOT_DIR" -type f -name "$filename" \
+        ! -path "*/BuildTemp/*" \
+        ! -path "*/.git/*" \
+        ! -path "*/IPA/*" \
+        ! -path "*/Frameworks/*" | head -1
+}
+
+ENTITLEMENTS_FILE=$(search_file "entitlements.plist")
+INFO_PLIST_FILE=$(search_file "Info.plist")
+ICON_FILE=$(search_file "Icon.png")
+
+if [ -z "$ENTITLEMENTS_FILE" ]; then
+    echo -e "${RED}❌ 未找到 entitlements.plist 文件（已搜索全目录）${NC}"
+    exit 1
 fi
+if [ -z "$INFO_PLIST_FILE" ]; then
+    echo -e "${RED}❌ 未找到 Info.plist 文件（已搜索全目录）${NC}"
+    exit 1
+fi
+if [ -z "$ICON_FILE" ]; then
+    echo -e "${YELLOW}⚠️ 未找到 Icon.png 文件（已搜索全目录）${NC}"
+fi
+
+echo -e "${BLUE}🔍 找到的关键文件：${NC}"
+echo -e "${BLUE}  entitlements.plist: $ENTITLEMENTS_FILE${NC}"
+echo -e "${BLUE}  Info.plist: $INFO_PLIST_FILE${NC}"
+echo -e "${BLUE}  Icon.png: $ICON_FILE${NC}"
 
 # ===================== 环境检测 =====================
 echo -e "${BLUE}🔍 检测构建环境...${NC}"
@@ -74,7 +87,7 @@ if ! command -v libtoolize >/dev/null 2>&1; then
 fi
 
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  PermanentStore 完整构建（含 ldid 补丁）${NC}"
+echo -e "${BLUE}  PermanentStore 完整构建（含 ldid 源码修复）${NC}"
 echo -e "${BLUE}  日志文件：$LOG_FILE${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
@@ -117,39 +130,68 @@ make install
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/"
 echo -e "${GREEN}✅ libplist 静态库构建完成${NC}"
 
-# ===================== 3. ldid（iOS 目标编译 · 补丁修复版）=====================
+# ===================== 3. ldid（iOS 目标编译 · 源码修复版）=====================
 echo -e "\n${YELLOW}📦 [3/5] ldid（iOS 目标编译）${NC}"
 cd "$BUILD_TEMP" || exit 1
 
 LDID_REPO="https://github.com/ProcursusTeam/ldid.git"
 CLONE_DIR="ldid"
 
-# 克隆仓库
+# 克隆仓库（指定版本 v2.1.5）
 rm -rf "$CLONE_DIR"
-git clone --depth 1 "$LDID_REPO" "$CLONE_DIR" || {
+git clone --depth 1 --branch v2.1.5 "$LDID_REPO" "$CLONE_DIR" || {
   echo -e "${RED}❌ ldid 克隆失败${NC}"
   exit 1
 }
 
 cd "$CLONE_DIR" || exit 1
 
-# ===================== 应用补丁（关键步骤）=====================
-echo -e "${BLUE}🔧 应用 OpenSSL 头文件补丁...${NC}"
-PATCH_FILE="$SCRIPT_DIR/ldid_openssl_fix.patch"  # 补丁文件路径（脚本所在目录）
+# ===================== 源码修复（替代补丁）=====================
+echo -e "${BLUE}🔧 修复 ldid.cpp 源码（OpenSSL 兼容性）...${NC}"
 
-if [ ! -f "$PATCH_FILE" ]; then
-  echo -e "${RED}❌ 未找到补丁文件：$PATCH_FILE${NC}"
-  exit 1
-fi
+# 1. 在文件开头添加 OpenSSL 兼容性头文件
+sed -i '' '16a\
+// OpenSSL 兼容性修复\
+#define OPENSSL_API_COMPAT 0x10100000L\
+#define OPENSSL_NO_DEPRECATED 0\
+\
+#include <openssl/conf.h>\
+#include <openssl/asn1.h>\
+#include <openssl/asn1t.h>\
+#include <openssl/x509.h>\
+#include <openssl/x509v3.h>\
+#include <openssl/evp.h>\
+' ldid.cpp
 
-patch -p1 < "$PATCH_FILE" || {
-  echo -e "${RED}❌ 补丁应用失败${NC}"
-  exit 1
-}
+# 2. 修复 LDID_VERSION 定义（如果不存在）
+grep -q "LDID_VERSION" ldid.cpp || sed -i '' 's/#include <openssl\/evp.h>/#include <openssl\/evp.h>\
+#ifndef LDID_VERSION\
+#define LDID_VERSION "2.1.5"\
+#endif/' ldid.cpp
 
-# 验证补丁是否生效
+# 3. 修复类型转换问题（X509_NAME* 的 const 修饰）
+sed -i '' 's/get(org, name, NID_organizationName)/get(org, const_cast<X509_NAME*>(name), NID_organizationName)/g' ldid.cpp
+sed -i '' 's/get(common, name, NID_commonName)/get(common, const_cast<X509_NAME*>(name), NID_commonName)/g' ldid.cpp
+sed -i '' 's/get(team, name, NID_organizationalUnitName)/get(team, const_cast<X509_NAME*>(name), NID_organizationalUnitName)/g' ldid.cpp
+
+# 4. 修复 stream.sgetn 的类型转换
+sed -i '' 's/stream.sgetn(reinterpret_cast<char *>(data), size)/stream.sgetn(reinterpret_cast<char *>(data), static_cast<std::streamsize>(size))/g' ldid.cpp
+
+# 5. 修复 ASN1_STRING 长度处理
+sed -i '' 's/_assert(ASN1_STRING_length(s) <= sizeof(identity->team) - 1)/int len = ASN1_STRING_length(s); _assert(len <= static_cast<int>(sizeof(identity->team) - 1))/g' ldid.cpp
+sed -i '' 's/memcpy(identity->team, team, ASN1_STRING_length(s))/memcpy(identity->team, team, len)/g' ldid.cpp
+sed -i '' 's/identity->team\[ASN1_STRING_length(s)\] = 0/identity->team\[len\] = 0/g' ldid.cpp
+
+# 6. 修复 vector 类型匹配
+sed -i '' 's/matches_.push_back(flag.first)/matches_.push_back(std::make_pair(flag.first.first, flag.first.second))/g' ldid.cpp
+
+# 7. 修复 hash 数组定义
+sed -i '' 's/uint8_t hash\[algorithm.size_\]/std::vector<uint8_t> hash(algorithm.size_)/g' ldid.cpp
+sed -i '' 's/_assert(memcmp(cdhash->hash, hash, algorithm.size_) == 0)/_assert(memcmp(cdhash->hash, hash.data(), algorithm.size_) == 0)/g' ldid.cpp
+
+# 验证修复是否生效
 if ! grep -q "#include <openssl/x509v3.h>" ldid.cpp; then
-  echo -e "${RED}❌ 补丁未正确应用${NC}"
+  echo -e "${RED}❌ ldid 源码修复失败${NC}"
   exit 1
 fi
 
@@ -169,7 +211,7 @@ clang++ -std=c++17 \
   -lcrypto -lssl \
   -framework Foundation -framework Security
 
-echo -e "${GREEN}✅ ldid（补丁修复版）编译完成${NC}"
+echo -e "${GREEN}✅ ldid（源码修复版）编译完成${NC}"
 
 # ===================== 4. zsign（iOS 交叉编译）=====================
 echo -e "\n${YELLOW}📦 [4/5] zsign${NC}"
@@ -220,25 +262,19 @@ cp "$RESOURCES_OUTPUT/ldid" "$APP_DIR/" 2>/dev/null || true
 cp "$RESOURCES_OUTPUT/zsign" "$APP_DIR/" 2>/dev/null || true
 chmod +x "$APP_DIR"/* 2>/dev/null || true
 
-# ===================== Info.plist =====================
-cat > "$APP_DIR/Info.plist" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key><string>$APP_NAME</string>
-    <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-    <key>CFBundleName</key><string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key><string>PermanentStore</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key><string>$BUILD_NUM</string>
-    <key>LSRequiresIPhoneOS</key><true/>
-    <key>MinimumOSVersion</key><string>$MIN_IOS_VERSION</string>
-</dict>
-</plist>
-EOF
+# ===================== 复制根目录找到的关键文件到 App =====================
+# 复制 Info.plist（使用找到的路径）
+cp "$INFO_PLIST_FILE" "$APP_DIR/Info.plist"
 
+# 复制图标（使用找到的路径，若存在）
+if [ -n "$ICON_FILE" ]; then
+  cp "$ICON_FILE" "$APP_DIR/Icon.png"
+  echo -e "${GREEN}✅ 图标文件已复制（$ICON_FILE）${NC}"
+else
+  echo -e "${YELLOW}⚠️ 未找到图标文件，App 将使用默认图标${NC}"
+fi
+
+# 复制 entitlements（使用找到的路径）
 cp "$ENTITLEMENTS_FILE" "$APP_DIR/entitlements.plist"
 
 # ===================== 签名（Ad-hoc，适配巨魔）=====================
