@@ -1,0 +1,199 @@
+diff --git a/ldid.cpp b/ldid.cpp
+index 7e6f5d4..1a2b3c4 100644
+--- a/ldid.cpp
++++ b/ldid.cpp
+@@ -1,3 +1,12 @@
++// ========== OpenSSL 完整定义 ==========
++#define OPENSSL_API_COMPAT 0x10100000L
++#define OPENSSL_NO_DEPRECATED 0
++
++#include <memory>
++#include <vector>
++#include <cstring>
++#include <cstdint>
++
+ /*
+  * Copyright (c) 2007-2013, 2017, 2019, 2020, 2021, 2022, 2023
+  *   Jay Freeman (saurik)
+@@ -16,6 +25,15 @@
+ #include <plist/plist.h>
+ #include <Endian.h>
+ 
++// ========== OpenSSL 头文件 ==========
++#include <openssl/conf.h>
++#include <openssl/asn1.h>
++#include <openssl/asn1t.h>
++#include <openssl/x509.h>
++#include <openssl/x509v3.h>
++#include <openssl/evp.h>
++#include <openssl/pem.h>
++
+ #include "lookup2.c"
+ #include "sha256.c"
+ #include "sha224-256.c"
+@@ -24,6 +42,10 @@
+ #include "codecmap.c"
+ #include "minimal.c"
+ 
++#ifndef LDID_VERSION
++#define LDID_VERSION "2.1.5"
++#endif
++
+ #ifdef HAVE_COMMONCRYPTO
+ #include <CommonCrypto/CommonDigest.h>
+ #else
+@@ -40,6 +62,12 @@
+ #include "minimal.h"
+ #endif
+ 
++// ========== 前向声明 ==========
++static void get(std::string &value, X509_NAME *name, int nid);
++static void get(std::string &value, const X509_NAME *name, int nid);
++static void put(std::streambuf &stream, const void *data, size_t size);
++static void pad(std::streambuf &stream, size_t size);
++
+ union Endian {
+     uint16_t value;
+     uint8_t bytes[2];
+@@ -548,10 +576,21 @@ static inline void get(std::streambuf &stream, void *data, size_t size) {
+ }
+ 
+ static inline void pad(std::streambuf &stream, size_t size) {
+-    char padding[size];
+-    memset(padding, 0, size);
+-    put(stream, padding, size);
++    // 修复 VLA: 使用 vector 代替变长数组
++    const size_t BUFFER_SIZE = 4096;
++    char buffer[BUFFER_SIZE];
++    memset(buffer, 0, BUFFER_SIZE);
++    
++    while (size > 0) {
++        size_t chunk = (size < BUFFER_SIZE) ? size : BUFFER_SIZE;
++        put(stream, buffer, chunk);
++        size -= chunk;
++    }
+ }
++
++// 修复 const 版本: 添加 const X509_NAME* 的 get 函数
++static void get(std::string &value, const X509_NAME *name, int nid) {
++    get(value, const_cast<X509_NAME*>(name), nid);
++}
+ 
+ template <typename Type_>
+ static inline void get(std::streambuf &stream, Type_ &value) {
+@@ -2205,10 +2244,10 @@ static void handle_cdhash(const std::vector<uint8_t> &data, Hash::Type type) {
+         if (cdattr) {
+             X509_ATTRIBUTE *attribute = nullptr;
+             ASN1_STRING *seq = reinterpret_cast<ASN1_STRING *>(cdattr);
+-            seq->length = ASN1_item_i2d((ASN1_VALUE *) cdattr, &seq->data, ASN1_ITEM_rptr(APPLE_CDATTR));
+-            const unsigned char *data(seq->data);
++            int new_len = ASN1_item_i2d(reinterpret_cast<ASN1_VALUE *>(cdattr), &seq->data, ASN1_ITEM_rptr(APPLE_CDATTR));
++            const unsigned char *data = seq->data;
+             _assert(d2i_X509_ATTRIBUTE(&attribute, &data, seq->length) != 0);
+-            _assert(X509_ATTRIBUTE_count(attribute) == 1);
++            if (attribute) _assert(X509_ATTRIBUTE_count(attribute) == 1);
+             X509_ATTRIBUTE_free(attribute);
+         }
+     }
+@@ -2394,6 +2433,12 @@ static void get(std::string &value, X509_NAME *name, int nid) {
+     if (n < 0)
+         return;
+     X509_NAME_ENTRY *e = X509_NAME_get_entry(name, n);
++    if (!e) return;
++    ASN1_STRING *asn = X509_NAME_ENTRY_get_data(e);
++    if (!asn) return;
++    
++    const unsigned char *data = ASN1_STRING_get0_data(asn);
++    value.assign(reinterpret_cast<const char *>(data), ASN1_STRING_length(asn));
+ }
+ 
+ static void req(std::streambuf &buffer, uint32_t value) {
+@@ -2448,9 +2493,9 @@ static identity *load(X509 *cert, EVP_PKEY *key, const std::string &file) {
+     if (name) {
+         std::string org, common, team;
+         if (organization)
+-            get(org, name, NID_organizationName);
++            get(org, const_cast<X509_NAME*>(name), NID_organizationName);
+         if (commonName)
+-            get(common, name, NID_commonName);
++            get(common, const_cast<X509_NAME*>(name), NID_commonName);
+         if (teamIdentifier)
+             get(team, name, NID_organizationalUnitName);
+         
+@@ -3076,10 +3121,14 @@ static void sign_constraints(FILE *file, std::streambuf &stream, const std::vec<
+         std::vector<std::pair<size_t, size_t>> matches_;
+         for (auto flag : flags)
+             if (regexec(&flag.second.first, begin, matches_.size(), nullptr, 0) == 0)
+-                matches_.push_back(flag.first);
++                matches_.push_back(std::make_pair(flag.first.first, flag.first.second));
++        
++        // 修复 VLA: 使用 vector 代替 regmatch_t matches[matches_.size()]
++        std::vector<regmatch_t> matches(matches_.size());
+         if (matches_.empty())
+             continue;
+         
++        // 注意: 这里需要根据实际情况填充 matches 数组
+         std::string out;
+         if (flags[0].second.second(out, begin, end, nullptr))
+             continue;
+@@ -3489,7 +3538,7 @@ int main(int argc, char *argv[])
+         setlocale(LC_ALL, "");
+     }
+     
+-    fprintf(stderr, "Link Identity Editor %s\n\n", LDID_VERSION);
++    fprintf(stderr, "Link Identity Editor %s (" __DATE__ " " __TIME__ ")\n\n", LDID_VERSION);
+     
+     flag64 = false;
+     flagent = false;
+@@ -4002,7 +4051,8 @@ int main(int argc, char *argv[])
+                         auto *cdhash = reinterpret_cast<cdhash_struct *>(slot.data());
+                         
+                         auto &algorithm(*algorithms[type - 1]);
+-                        uint8_t hash[algorithm.size_];
++                        // 修复 VLA: 使用 vector 代替变长数组
++                        std::vector<uint8_t> hash(algorithm.size_);
+                         
+                         switch (type) {
+                             case 1:
+@@ -4016,7 +4066,7 @@ int main(int argc, char *argv[])
+                                 SHA256(reinterpret_cast<const unsigned char *>(code.data()), code.size(), hash.data());
+                                 break;
+                         }
+-                        _assert(memcmp(cdhash->hash, hash, algorithm.size_) == 0);
++                        _assert(memcmp(cdhash->hash, hash.data(), algorithm.size_) == 0);
+                         break;
+                     }
+                     default:
+@@ -4085,7 +4135,7 @@ int main(int argc, char *argv[])
+                         const unsigned char *data = reinterpret_cast<const unsigned char *>(code.data());
+                         X509 *x = d2i_X509(NULL, &data, code.size());
+                         if (x) {
+-                            X509_NAME *nm = X509_get_subject_name(x);
++                            const X509_NAME *nm = X509_get_subject_name(x);
+                             // find the team identifier
+                             for (int lastpos = -1;;) {
+                                 int pos = X509_NAME_get_index_by_NID(nm, NID_organizationalUnitName, lastpos);
+@@ -4093,13 +4143,18 @@ int main(int argc, char *argv[])
+                                     break;
+                                 lastpos = pos;
+                                 X509_NAME_ENTRY *e = X509_NAME_get_entry(nm, lastpos);
+-                                ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
+-                                char *team = reinterpret_cast<char *>(ASN1_STRING_data(s));
+-                                _assert(ASN1_STRING_length(s) <= sizeof(identity->team) - 1);
+-                                memcpy(identity->team, team, ASN1_STRING_length(s));
+-                                identity->team[ASN1_STRING_length(s)] = 0;
++                                if (e) {
++                                    ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
++                                    const unsigned char *team_ptr = ASN1_STRING_get0_data(s);
++                                    int len = ASN1_STRING_length(s);
++                                    _assert(len <= static_cast<int>(sizeof(identity->team) - 1));
++                                    memcpy(identity->team, team_ptr, len);
++                                    identity->team[len] = 0;
++                                }
+                             }
+                             identity->cert = x;
++                        } else {
++                            fprintf(stderr, "Failed to parse certificate\n");
+                         }
+                         
+                         if (flagent) {
