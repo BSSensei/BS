@@ -2,221 +2,69 @@ diff --git a/ldid.cpp b/ldid.cpp
 index 7e6f5d4..8a9b0c1 100644
 --- a/ldid.cpp
 +++ b/ldid.cpp
-@@ -16,6 +16,16 @@
-  * Software. 
-  */
- 
-+// OpenSSL 兼容性修复
-+#define OPENSSL_API_COMPAT 0x10100000L
-+#define OPENSSL_NO_DEPRECATED 0
-+
-+#include <openssl/conf.h>
-+#include <openssl/asn1.h>
-+#include <openssl/asn1t.h>
-+#include <openssl/x509.h>
-+#include <openssl/x509v3.h>
-+#include <openssl/evp.h>
- #include <openssl/evp.h>
- #include <openssl/pem.h>
- #include <openssl/x509.h>
-@@ -347,6 +357,14 @@ static void sha1(const void *data, size_t size, void *digest) {
-     SHA1(reinterpret_cast<const unsigned char *>(data), size, reinterpret_cast<unsigned char *>(digest));
+@@ -6,6 +6,7 @@
+ #include <fstream>
+ #include <iostream>
+ #include <memory>   // 新增：引入 unique_ptr
++#include <vector>  // 新增：引入 vector 替代 VLA
+ #include <set>
+ #include <sstream>
+ #include <string>
+@@ -564,9 +565,9 @@ static inline void put(std::streambuf &stream, const void *data, size_t size, cons
  }
  
-+// 辅助函数：安全地获取 X509_NAME 条目
-+static X509_NAME_ENTRY* safe_X509_NAME_get_entry(X509_NAME *name, int idx) {
-+    return X509_NAME_get_entry(name, idx);
-+}
-+
-+// 版本号定义
-+#ifndef LDID_VERSION
- #define LDID_VERSION "2.1.5"
-+#endif
- 
- #include "lookup2.c"
- #include "sha256.c"
-@@ -548,7 +566,7 @@ static inline void pad(std::streambuf &stream, size_t size) {
+ static inline void pad(std::streambuf &stream, size_t size) {
+-    char padding[size]; // 非标准 C++ VLA
+-    memset(padding, 0, size);
+-    put(stream, padding, size);
++    std::vector<char> padding(size, 0); // 标准 C++ 动态数组
++    put(stream, padding.data(), size);
  }
  
- static inline void get(std::streambuf &stream, void *data, size_t size) {
--    if (stream.sgetn(reinterpret_cast<char *>(data), size) != size)
-+    if (stream.sgetn(reinterpret_cast<char *>(data), static_cast<std::streamsize>(size)) != static_cast<std::streamsize>(size))
-         _assert(false);
- }
- 
-@@ -2205,10 +2223,10 @@ static void handle_cdhash(const std::vector<uint8_t> &data, Hash::Type type) {
-         if (cdattr) {
-             X509_ATTRIBUTE *attribute = nullptr;
-             ASN1_STRING *seq = reinterpret_cast<ASN1_STRING *>(cdattr);
--            seq->length = ASN1_item_i2d((ASN1_VALUE *) cdattr, &seq->data, ASN1_ITEM_rptr(APPLE_CDATTR));
--            const unsigned char *data(seq->data);
--            _assert(d2i_X509_ATTRIBUTE(&attribute, &data, seq->length) != 0);
--            _assert(X509_ATTRIBUTE_count(attribute) == 1);
-+            int new_len = ASN1_item_i2d(reinterpret_cast<ASN1_VALUE *>(cdattr), &seq->data, ASN1_ITEM_rptr(APPLE_CDATTR));
-+            seq->length = new_len;
-+            const unsigned char *data_ptr = seq->data;
-+            _assert(d2i_X509_ATTRIBUTE(&attribute, &data_ptr, seq->length) != 0);
-             X509_ATTRIBUTE_free(attribute);
-         }
+ template <typename Type_>
+@@ -2031,8 +2032,9 @@ static void get(std::string &value, X509_NAME *name, int nid) {
+         fprintf(stderr, "ldid: An error occured while parsing the certificate: %s\n", ERR_error_string(ERR_get_error(), NULL));
+         exit(1);
      }
-@@ -2391,15 +2409,21 @@ static void get(std::string &value, X509_NAME *name, int nid) {
-     }
+-    value.assign(reinterpret_cast<char *>(ASN1_STRING_data(asn)), ASN1_STRING_length(asn));
++    // OpenSSL 3.x 使用 get0_data 获取只读指针
++    const unsigned char *data_ptr = ASN1_STRING_get0_data(asn);
++    value.assign(reinterpret_cast<const char *>(data_ptr), ASN1_STRING_length(asn));
  }
  
-+// 从证书中提取信息
-+static void extract_cert_info(X509 *cert, std::string &subject, std::string &issuer, 
-+                               std::string &org, std::string &common, std::string &team) {
-+    X509_NAME *subject_name = X509_get_subject_name(cert);
-+    X509_NAME *issuer_name = X509_get_issuer_name(cert);
-+    
-+    char buf[256];
-+    X509_NAME_oneline(subject_name, buf, sizeof(buf));
-+    subject = buf;
-+    X509_NAME_oneline(issuer_name, buf, sizeof(buf));
-+    issuer = buf;
-+    
-+    get(org, subject_name, NID_organizationName);
-+    get(common, subject_name, NID_commonName);
-+    get(team, subject_name, NID_organizationalUnitName);
-+}
-+
- static identity *load(X509 *cert, EVP_PKEY *key, const std::string &file) {
-     identity *identity = new struct identity();
-     identity->next = NULL;
-@@ -2455,12 +2479,12 @@ static identity *load(X509 *cert, EVP_PKEY *key, const std::string &file) {
-     if (name) {
-         std::string org, common, team;
-         if (organization)
--            get(org, name, NID_organizationName);
-+            get(org, const_cast<X509_NAME*>(name), NID_organizationName);
-         if (commonName)
--            get(common, name, NID_commonName);
-+            get(common, const_cast<X509_NAME*>(name), NID_commonName);
-         if (teamIdentifier)
--            get(team, name, NID_organizationalUnitName);
--        
-+            get(team, const_cast<X509_NAME*>(name), NID_organizationalUnitName);
-+        
-         // 选择最佳名称
-         if (!team.empty())
-             identity->name = team;
-@@ -3076,7 +3100,7 @@ static void sign_constraints(FILE *file, std::streambuf &stream, const std::vect
-         std::vector<std::pair<size_t, size_t>> matches_;
-         for (auto flag : flags)
-             if (regexec(&flag.second.first, begin, matches_.size(), nullptr, 0) == 0)
--                matches_.push_back(flag.first);
-+                matches_.push_back(std::make_pair(flag.first.first, flag.first.second));
-         if (matches_.empty())
-             continue;
-         
-@@ -3489,7 +3513,7 @@ int main(int argc, char *argv[])
-         setlocale(LC_ALL, "");
+ static void req(std::streambuf &buffer, uint32_t value) {
+@@ -2728,7 +2730,7 @@ struct Rule {
+     unsigned weight_;
+     Mode mode_;
+     std::string code_;
+-    mutable std::auto_ptr<Expression> regex_; // 已废弃
++    mutable std::unique_ptr<Expression> regex_; // C++11+ 标准智能指针
+ 
+     Rule(unsigned weight, Mode mode, const std::string &code) :
+         weight_(weight),
+@@ -2738,7 +2740,7 @@ struct Rule {
      }
-     
--    fprintf(stderr, "Link Identity Editor %s\n\n", LDID_VERSION);
-+    fprintf(stderr, "Link Identity Editor %s\n\n", LDID_VERSION " (" __DATE__ " " __TIME__ ")");
-     
-     flag64 = false;
-     flagent = false;
-@@ -4002,7 +4026,7 @@ int main(int argc, char *argv[])
-                         auto *cdhash = reinterpret_cast<cdhash_struct *>(slot.data());
-                         
-                         auto &algorithm(*algorithms[type - 1]);
--                        uint8_t hash[algorithm.size_];
-+                        std::vector<uint8_t> hash(algorithm.size_);
-                         
-                         switch (type) {
-                             case 1:
-@@ -4016,7 +4040,7 @@ int main(int argc, char *argv[])
-                                 SHA256(reinterpret_cast<const unsigned char *>(code.data()), code.size(), hash.data());
-                                 break;
-                         }
--                        _assert(memcmp(cdhash->hash, hash, algorithm.size_) == 0);
-+                        _assert(memcmp(cdhash->hash, hash.data(), algorithm.size_) == 0);
+ 
+     void Compile() const {
+-        regex_.reset(new Expression(code_)); // auto_ptr 使用 reset
++        regex_.reset(new Expression(code_)); // unique_ptr 同样使用 reset
+     }
+ 
+     bool operator ()(const std::string &data) const {
+@@ -3532,9 +3534,9 @@ static Hash Sign(const uint8_t *prefix, size_t size, std::streambuf &buffer, Has
+                         algorithm(hash, blob + begin, end - begin);
                          break;
-                     }
-                     default:
-@@ -4085,23 +4109,25 @@ int main(int argc, char *argv[])
-                         const unsigned char *data = reinterpret_cast<const unsigned char *>(code.data());
-                         X509 *x = d2i_X509(NULL, &data, code.size());
-                         if (x) {
--                            X509_NAME *nm = X509_get_subject_name(x);
-+                            X509_NAME *nm = X509_get_subject_name(x);
-                             // find the team identifier
-                             for (int lastpos = -1;;) {
-                                 int pos = X509_NAME_get_index_by_NID(nm, NID_organizationalUnitName, lastpos);
-                                 if (pos == -1)
-                                     break;
-                                 lastpos = pos;
--                                X509_NAME_ENTRY *e = X509_NAME_get_entry(nm, lastpos);
--                                ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
--                                char *team = reinterpret_cast<char *>(ASN1_STRING_data(s));
--                                _assert(ASN1_STRING_length(s) <= sizeof(identity->team) - 1);
--                                memcpy(identity->team, team, ASN1_STRING_length(s));
--                                identity->team[ASN1_STRING_length(s)] = 0;
-+                                X509_NAME_ENTRY *e = X509_NAME_get_entry(nm, lastpos);
-+                                if (e) {
-+                                    ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
-+                                    char *team = reinterpret_cast<char *>(ASN1_STRING_data(s));
-+                                    int len = ASN1_STRING_length(s);
-+                                    _assert(len <= static_cast<int>(sizeof(identity->team) - 1));
-+                                    memcpy(identity->team, team, len);
-+                                    identity->team[len] = 0;
-+                                }
-                             }
-                             identity->cert = x;
--                        }
--                        
-+                        }
-+                        
-                         // 处理 entitlements
-                         if (flagent) {
-                             std::vector<uint8_t> entitlements;
-@@ -4123,6 +4149,47 @@ int main(int argc, char *argv[])
-         }
-     }
-     
-+    // 确保至少有一个身份
-+    if (!identities) {
-+        fprintf(stderr, "No valid identities found\n");
-+        return 1;
-+    }
-+    
-+    // 如果未指定签名文件，使用第一个身份
-+    if (!flagfile && identities) {
-+        flagfile = identities->file.c_str();
-+    }
-+    
-+    // 处理每个输入文件
-+    for (auto &arg : flags) {
-+        // 签名逻辑
-+        if (arg.second.first) {
-+            // 执行签名
-+            continue;
-+        }
-+    }
-+    
-+    // 生成 entitlements 数据
-+    if (flagder && !flagent) {
-+        fprintf(stderr, "Warning: --der specified without --entitlements\n");
-+    }
-+    
-+    if (flagent && entitlements_data) {
-+        if (flagxml) {
-+            // XML 格式输出
-+        } else if (flagder) {
-+            // DER 格式输出
-+        }
-+    }
-+    
-+    // 清理资源
-+    for (identity *id = identities; id; ) {
-+        identity *next = id->next;
-+        if (id->cert) X509_free(id->cert);
-+        if (id->key) EVP_PKEY_free(id->key);
-+        delete id;
-+        id = next;
-+    }
-+    
-     return 0;
- }
+                     case 3: // SHA256
+-                        std::vector<uint8_t> hash(algorithm.size_);
++                        std::vector<uint8_t> hash_vec(algorithm.size_); // 改名避免冲突
+                         algorithm(
+-                            hash.data(),
++                            hash_vec.data(), // 使用 vector 的数据指针
+                             blob + begin,
+                             end - begin
+                         );
+-                        Hex(hash, 20); // 这里需要调整，假设 Hex 接受 vector
++                        Hex(hash_vec.data(), hash_vec.size()); // 显式传递数据和大小
+                         break;
+                 }
+                 break;
