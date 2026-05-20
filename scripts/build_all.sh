@@ -24,15 +24,14 @@ BUILD_TEMP="$ROOT_DIR/BuildTemp"
 LIBS_OUTPUT="$ROOT_DIR/Frameworks"
 RESOURCES_OUTPUT="$ROOT_DIR/Resources"
 IPA_OUTPUT="$ROOT_DIR/IPA"
-
 LDID_SOURCE_DIR="$ROOT_DIR/ldid"  # 本地源码目录
-PATCH_FILE="$SCRIPT_DIR/ldid_combined_fix.patch" # 合并后的补丁
 
 mkdir -p "$BUILD_TEMP" "$LIBS_OUTPUT" "$RESOURCES_OUTPUT" "$IPA_OUTPUT"
 
 DEVICE_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 if [ -z "$DEVICE_SDK_PATH" ]; then
-  echo -e "${RED}❌ 未找到 iOS SDK 路径${NC}"; exit 1
+  echo -e "${RED}❌ 未找到 iOS SDK 路径（请安装 Xcode 命令行工具）${NC}"
+  exit 1
 fi
 
 MIN_IOS_VERSION="12.0"
@@ -55,19 +54,23 @@ ENTITLEMENTS_FILE=$(search_file "entitlements.plist")
 INFO_PLIST_FILE=$(search_file "Info.plist")
 ICON_FILE=$(search_file "Icon.png")
 
-[ -z "$ENTITLEMENTS_FILE" ] && { echo -e "${RED}❌ 未找到 entitlements.plist${NC}"; exit 1; }
-[ -z "$INFO_PLIST_FILE" ] && { echo -e "${RED}❌ 未找到 Info.plist${NC}"; exit 1; }
+if [ -z "$ENTITLEMENTS_FILE" ]; then
+    echo -e "${RED}❌ 未找到 entitlements.plist${NC}"; exit 1
+fi
+if [ -z "$INFO_PLIST_FILE" ]; then
+    echo -e "${RED}❌ 未找到 Info.plist${NC}"; exit 1
+fi
 
-echo -e "${BLUE}🔍 找到文件：${NC}"
+echo -e "${BLUE}🔍 找到关键文件：${NC}"
 echo -e "${BLUE}  entitlements: $ENTITLEMENTS_FILE${NC}"
 echo -e "${BLUE}  Info.plist: $INFO_PLIST_FILE${NC}"
 echo -e "${BLUE}  Icon: $ICON_FILE${NC}"
 
-# ===================== 环境检测 =====================
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  PermanentStore 完整构建（本地源码 + 合并补丁）${NC}"
+echo -e "${BLUE}  PermanentStore 完整构建（内置修复版）${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
+# ===================== 环境检测 =====================
 if ! command -v xcrun >/dev/null 2>&1; then
   echo -e "${RED}❌ 未检测到 Xcode 工具链${NC}"; exit 1
 fi
@@ -83,8 +86,11 @@ cd "$BUILD_TEMP" || exit 1
 if [ ! -d openssl_install ]; then
     [ -d openssl ] || git clone --depth 1 https://github.com/openssl/openssl.git openssl
     cd openssl || exit 1
-    ./Configure ios64-cross --prefix="$BUILD_TEMP/openssl_install" no-shared no-tests \
-        -isysroot "$DEVICE_SDK_PATH" -mios-version-min="$MIN_IOS_VERSION"
+    ./Configure ios64-cross \
+        --prefix="$BUILD_TEMP/openssl_install" \
+        no-shared no-tests \
+        -isysroot "$DEVICE_SDK_PATH" \
+        -mios-version-min="$MIN_IOS_VERSION"
     make -j"$CPU_CORES"
     make install_sw
     cd ..
@@ -100,9 +106,12 @@ if [ ! -d libplist_install ]; then
     [ -d libplist ] || git clone --depth 1 https://github.com/libimobiledevice/libplist.git libplist
     cd libplist || exit 1
     [ ! -f configure ] && ./autogen.sh
-    ./configure --prefix="$BUILD_TEMP/libplist_install" --host=aarch64-apple-darwin \
+    ./configure \
+        --prefix="$BUILD_TEMP/libplist_install" \
+        --host=aarch64-apple-darwin \
         --enable-static --disable-shared --disable-tests \
-        CC="xcrun -sdk iphoneos clang" CXX="xcrun -sdk iphoneos clang++" \
+        CC="xcrun -sdk iphoneos clang" \
+        CXX="xcrun -sdk iphoneos clang++" \
         CFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=$MIN_IOS_VERSION" \
         CXXFLAGS="-arch arm64 -isysroot $DEVICE_SDK_PATH -mios-version-min=$MIN_IOS_VERSION"
     make -j"$CPU_CORES"
@@ -112,34 +121,53 @@ fi
 cp "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" "$LIBS_OUTPUT/" 2>/dev/null || true
 echo -e "${GREEN}✅ libplist 静态库就绪${NC}"
 
-# ===================== 3. ldid（复制本地源码 + 应用合并补丁）=====================
-echo -e "\n${YELLOW}📦 [3/5] ldid（本地源码编译）${NC}"
+# ===================== 3. ldid（复制源码 + SED 修复）=====================
+echo -e "\n${YELLOW}📦 [3/5] ldid（iOS 目标编译）${NC}"
 
-if [ ! -d "$LDID_SOURCE_DIR" ]; then
-    echo -e "${RED}❌ 未找到本地 ldid 源码目录：$LDID_SOURCE_DIR${NC}"; exit 1
-fi
-if [ ! -f "$LDID_SOURCE_DIR/ldid.cpp" ]; then
-    echo -e "${RED}❌ 在 $LDID_SOURCE_DIR 中未找到 ldid.cpp${NC}"; exit 1
+if [ ! -d "$LDID_SOURCE_DIR" ] || [ ! -f "$LDID_SOURCE_DIR/ldid.cpp" ]; then
+    echo -e "${RED}❌ 未找到 ldid 源码目录或 ldid.cpp${NC}"; exit 1
 fi
 
 # 复制源码到构建目录
 cd "$BUILD_TEMP" || exit 1
 rm -rf ldid_build
 mkdir -p ldid_build
-echo -e "${BLUE}📋 复制源码从 $LDID_SOURCE_DIR 到 $BUILD_TEMP/ldid_build${NC}"
+echo -e "${BLUE}📋 复制源码从 $LDID_SOURCE_DIR${NC}"
 cp -r "$LDID_SOURCE_DIR/." "ldid_build/"
 cd ldid_build || exit 1
 
-# 应用合并补丁
-if [ -f "$PATCH_FILE" ]; then
-    echo -e "${BLUE}🔧 应用合并补丁...${NC}"
-    patch -p1 < "$PATCH_FILE" || {
-        echo -e "${RED}❌ 补丁应用失败（请检查 patch 文件）${NC}"
-        exit 1
-    }
-else
-    echo -e "${YELLOW}⚠️ 未找到补丁文件，跳过打补丁步骤${NC}"
+echo -e "${BLUE}🔧 使用 SED 修复源码兼容性...${NC}"
+
+# 修复 1: 添加必要的 includes (如果还没有)
+if ! grep -q "#include <memory>" ldid.cpp; then
+    sed -i '' '1s/^/#include <memory>\n#include <vector>\n/' ldid.cpp
 fi
+
+# 修复 2: 替换 auto_ptr 为 unique_ptr
+sed -i '' 's/std::auto_ptr/std::unique_ptr/g' ldid.cpp
+
+# 修复 3: 替换 ASN1_STRING_data 为 OpenSSL 3.x 兼容函数
+sed -i '' 's/ASN1_STRING_data(/ASN1_STRING_get0_data(/g' ldid.cpp
+
+# 修复 4: 修复 VLA (变长数组) 为非标准的 vector
+# 注意：这里假设原代码是 "char padding[size];"
+sed -i '' 's/char padding$$size$$;/std::vector<char> padding(size, 0);/g' ldid.cpp
+sed -i '' 's/memset(padding, 0, size);/\/\/ memset removed/g' ldid.cpp
+sed -i '' 's/put(stream, padding, size);/put(stream, padding.data(), size);/g' ldid.cpp
+
+# 修复 5: 修复 Algorithm 调用中的类型问题 (将 uint8_t hash[] 改为 vector)
+sed -i '' 's/uint8_t hash$$algorithm\.size_$$;/std::vector<uint8_t> hash(algorithm.size_);/g' ldid.cpp
+sed -i '' 's/memcmp(cdhash->hash, hash, algorithm.size_)/memcmp(cdhash->hash, hash.data(), algorithm.size_)/g' ldid.cpp
+
+# 验证修复是否成功
+if grep -q "std::auto_ptr" ldid.cpp; then
+    echo -e "${RED}❌ auto_ptr 替换失败${NC}"; exit 1
+fi
+if grep -q "ASN1_STRING_data(" ldid.cpp; then
+    echo -e "${RED}❌ ASN1_STRING_data 替换失败${NC}"; exit 1
+fi
+
+echo -e "${GREEN}✅ 源码修复完成${NC}"
 
 # 编译 ldid
 echo -e "${BLUE}🛠️ 开始编译 ldid...${NC}"
