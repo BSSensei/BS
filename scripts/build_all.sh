@@ -59,11 +59,11 @@ if [ -z "$ENTITLEMENTS_FILE" ] || [ -z "$INFO_PLIST_FILE" ]; then
 fi
 
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}  PermanentStore 完整构建${NC}"
+echo -e "${BLUE}  PermanentStore 完整构建（仅 ldid）${NC}"
 echo -e "${BLUE}============================================================${NC}"
 
 # ===================== 1. OpenSSL =====================
-echo -e "\n${YELLOW}📦 [1/5] OpenSSL${NC}"
+echo -e "\n${YELLOW}📦 [1/4] OpenSSL${NC}"
 cd "$BUILD_TEMP" || exit 1
 if [ ! -d openssl_install ]; then
     [ -d openssl ] || git clone --depth 1 https://github.com/openssl/openssl.git openssl
@@ -80,7 +80,7 @@ fi
 echo -e "${GREEN}✅ OpenSSL 完成${NC}"
 
 # ===================== 2. libplist =====================
-echo -e "\n${YELLOW}📦 [2/5] libplist${NC}"
+echo -e "\n${YELLOW}📦 [2/4] libplist${NC}"
 cd "$BUILD_TEMP" || exit 1
 if [ ! -d libplist_install ]; then
     [ -d libplist ] || git clone --depth 1 https://github.com/libimobiledevice/libplist.git libplist
@@ -101,7 +101,7 @@ fi
 echo -e "${GREEN}✅ libplist 完成${NC}"
 
 # ===================== 3. ldid（使用补丁修复）=====================
-echo -e "\n${YELLOW}📦 [3/5] ldid${NC}"
+echo -e "\n${YELLOW}📦 [3/4] ldid${NC}"
 
 if [ ! -d "$LDID_SOURCE_DIR" ] || [ ! -f "$LDID_SOURCE_DIR/ldid.cpp" ]; then
     echo -e "${RED}❌ 未找到 ldid 源码${NC}"; exit 1
@@ -252,10 +252,13 @@ xcrun -sdk iphoneos clang++ -std=c++14 \
     -isysroot "$DEVICE_SDK_PATH" \
     -mios-version-min="$MIN_IOS_VERSION" \
     -I"$BUILD_TEMP/openssl_install/include" \
+    -I"$BUILD_TEMP/libplist_install/include" \
+    -L"$BUILD_TEMP/libplist_install/lib" \
     -DHAVE_OPENSSL=1 \
     -o "$RESOURCES_OUTPUT/ldid" \
     ldid.cpp \
     "$BUILD_TEMP/openssl_install/lib/libcrypto.a" \
+    "$BUILD_TEMP/libplist_install/lib/libplist-2.0.a" \
     -framework Foundation -framework Security
 
 if [ -f "$RESOURCES_OUTPUT/ldid" ]; then
@@ -265,30 +268,8 @@ else
     exit 1
 fi
 
-# ===================== 4. zsign =====================
-echo -e "\n${YELLOW}📦 [4/5] zsign${NC}"
-cd "$BUILD_TEMP" || exit 1
-if [ ! -d zsign ]; then
-    git clone --depth 1 https://github.com/zhlynn/zsign.git zsign
-fi
-cd zsign || exit 1
-
-xcrun -sdk iphoneos clang++ -std=c++11 \
-    -arch arm64 \
-    -isysroot "$DEVICE_SDK_PATH" \
-    -mios-version-min="$MIN_IOS_VERSION" \
-    -I"$BUILD_TEMP/openssl_install/include" \
-    -I"$BUILD_TEMP/libplist_install/include" \
-    -L"$BUILD_TEMP/openssl_install/lib" \
-    -L"$BUILD_TEMP/libplist_install/lib" \
-    -o "$RESOURCES_OUTPUT/zsign" \
-    *.cpp \
-    -lcrypto -lssl -lplist-2.0
-
-echo -e "${GREEN}✅ zsign 完成${NC}"
-
-# ===================== 5. Swift App =====================
-echo -e "\n${YELLOW}📦 [5/5] Swift App${NC}"
+# ===================== 4. Swift App =====================
+echo -e "\n${YELLOW}📦 [4/4] Swift App${NC}"
 
 SWIFT_FILES=$(find "$ROOT_DIR" -name "*.swift" ! -path "*/BuildTemp/*" 2>/dev/null)
 if [ -z "$SWIFT_FILES" ]; then
@@ -313,7 +294,6 @@ cp "$INFO_PLIST_FILE" "$APP_DIR/Info.plist"
 cp "$ENTITLEMENTS_FILE" "$APP_DIR/entitlements.plist"
 [ -n "$ICON_FILE" ] && cp "$ICON_FILE" "$APP_DIR/Icon.png"
 cp "$RESOURCES_OUTPUT/ldid" "$APP_DIR/"
-cp "$RESOURCES_OUTPUT/zsign" "$APP_DIR/"
 chmod +x "$APP_DIR"/* 2>/dev/null || true
 
 # ===================== 打包 IPA =====================
