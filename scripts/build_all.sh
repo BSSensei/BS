@@ -110,22 +110,20 @@ fi
 cd "$BUILD_TEMP" || exit 1
 rm -rf ldid_build
 mkdir -p ldid_build
-cp "$LDID_SOURCE_DIR/ldid.cpp" ldid_build/
 
-# 复制补丁文件
-if [ -f "$LDID_SOURCE_DIR/ldid_complete.patch" ]; then
-    cp "$LDID_SOURCE_DIR/ldid_complete.patch" ldid_build/
-fi
+# 复制 ldid 源码目录下所有文件（包括 ldid.hpp 和其他依赖文件）
+cp -r "$LDID_SOURCE_DIR/." ldid_build/
 
 cd ldid_build || exit 1
 
-# 应用补丁（兼容 git apply 和 patch）
-if [ -f ldid_complete.patch ]; then
+# 从 scripts 目录复制并应用补丁文件
+PATCH_FILE="$SCRIPT_DIR/ldid_complete.patch"
+if [ -f "$PATCH_FILE" ]; then
     echo -e "${BLUE}🔧 应用补丁...${NC}"
-    git apply ldid_complete.patch 2>/dev/null || patch ldid.cpp < ldid_complete.patch 2>/dev/null || true
+    git apply "$PATCH_FILE" 2>/dev/null || patch -p1 < "$PATCH_FILE" 2>/dev/null || patch ldid.cpp < "$PATCH_FILE" 2>/dev/null || true
     echo -e "${GREEN}✅ 补丁应用完成${NC}"
 else
-    echo -e "${YELLOW}⚠️ 未找到补丁文件，跳过${NC}"
+    echo -e "${YELLOW}⚠️ 未找到补丁文件: $PATCH_FILE，跳过${NC}"
 fi
 
 # 编译
@@ -136,6 +134,7 @@ xcrun -sdk iphoneos clang++ -std=c++14 \
     -mios-version-min="$MIN_IOS_VERSION" \
     -I"$BUILD_TEMP/openssl_install/include" \
     -I"$BUILD_TEMP/libplist_install/include" \
+    -I. \
     -L"$BUILD_TEMP/openssl_install/lib" \
     -L"$BUILD_TEMP/libplist_install/lib" \
     -DHAVE_OPENSSL=1 \
