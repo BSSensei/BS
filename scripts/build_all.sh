@@ -107,24 +107,22 @@ if [ ! -d "$LDID_SOURCE_DIR" ] || [ ! -f "$LDID_SOURCE_DIR/ldid.cpp" ]; then
     echo -e "${RED}❌ 未找到 ldid 源码${NC}"; exit 1
 fi
 
+if [ ! -f "$LDID_SOURCE_DIR/fix_ldid.py" ]; then
+    echo -e "${RED}❌ 未找到 fix_ldid.py${NC}"; exit 1
+fi
+
 cd "$BUILD_TEMP" || exit 1
 rm -rf ldid_build
 mkdir -p ldid_build
 
-# 复制 ldid 源码目录下所有文件（包括 ldid.hpp 和其他依赖文件）
+# 复制 ldid 源码目录下所有文件
 cp -r "$LDID_SOURCE_DIR/." ldid_build/
 
 cd ldid_build || exit 1
 
-# 从 scripts 目录复制并应用补丁文件
-PATCH_FILE="$SCRIPT_DIR/ldid_complete.patch"
-if [ -f "$PATCH_FILE" ]; then
-    echo -e "${BLUE}🔧 应用补丁...${NC}"
-    git apply "$PATCH_FILE" 2>/dev/null || patch -p1 < "$PATCH_FILE" 2>/dev/null || patch ldid.cpp < "$PATCH_FILE" 2>/dev/null || true
-    echo -e "${GREEN}✅ 补丁应用完成${NC}"
-else
-    echo -e "${YELLOW}⚠️ 未找到补丁文件: $PATCH_FILE，跳过${NC}"
-fi
+# 用 Python 精准修复
+echo -e "${BLUE}🔧 运行 fix_ldid.py 修复兼容性...${NC}"
+python3 fix_ldid.py ldid.cpp
 
 # 编译
 echo -e "${BLUE}🛠️ 编译 ldid...${NC}"
