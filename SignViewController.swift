@@ -15,7 +15,6 @@ class SignViewController: UIViewController {
     private let scrollView = UIScrollView()
     private let contentView = UIView()
 
-    private let engineSegment = UISegmentedControl(items: SigningService.SignConfig.Engine.allCases.map { $0.rawValue })
     private var pseudoSwitch: UISwitch!
     private var pseudoLabel: UILabel!
 
@@ -23,8 +22,6 @@ class SignViewController: UIViewController {
     private var teamIDField: UITextField?
     private var passwordField: UITextField?
     private var certTableView: UITableView?
-    private var provTableView: UITableView?
-    private var zsignAdhocSwitch: UISwitch?
 
     private var ipaLabel: UILabel!
     private var outputTextView: UITextView!
@@ -69,7 +66,6 @@ class SignViewController: UIViewController {
         super.viewWillAppear(animated)
         refreshData()
         updateCertTable()
-        updateProvisioningTable()
     }
     
     deinit {
@@ -78,8 +74,8 @@ class SignViewController: UIViewController {
 
     // MARK: - 读取用户预设
     private func loadDefaultPresets() {
-        let defaultEngine = UserDefaults.standard.string(forKey: "defaultSignEngine") ?? "ldid2"
-        config.engine = defaultEngine == "zsign" ? .zsign : .ldid2
+        // 固定使用 ldid2 引擎
+        config.engine = .ldid2
 
         let defaultPseudo = UserDefaults.standard.bool(forKey: "defaultPseudoMode")
         config.mode = defaultPseudo ? .adhoc : .real
@@ -98,11 +94,6 @@ class SignViewController: UIViewController {
         availableCerts = (try? FileManager.default.contentsOfDirectory(atPath: certsDir))?.filter { name in
             let ext = (name as NSString).pathExtension.lowercased()
             return ["p12", "crt", "key", "pem", "cer", "der"].contains(ext)
-        } ?? []
-
-        let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
-        availableProvisionings = (try? FileManager.default.contentsOfDirectory(atPath: docsDir))?.filter {
-            $0.hasSuffix(".mobileprovision")
         } ?? []
     }
 
@@ -128,22 +119,14 @@ class SignViewController: UIViewController {
         contentView.subviews.forEach { $0.removeFromSuperview() }
         var y: CGFloat = 16
 
-        // ---- 引擎选择 ----
-        addSectionTitle("签名引擎", at: &y)
-        engineSegment.frame = CGRect(x: pad, y: y, width: contentWidth, height: 32)
-        engineSegment.selectedSegmentIndex = (config.engine == .ldid2) ? 0 : 1
-        engineSegment.addTarget(self, action: #selector(engineChanged(_:)), for: .valueChanged)
-        styleSegment(engineSegment)
-        contentView.addSubview(engineSegment)
-        y += 44
-
-        // ---- 伪签名模式开关 ----
+        // ---- 签名模式选择（伪签名/真签名） ----
+        addSectionTitle("签名模式", at: &y)
         let modeCard = UIView(frame: CGRect(x: pad, y: y, width: contentWidth, height: 52))
         modeCard.backgroundColor = Theme.card
         modeCard.layer.cornerRadius = 12
 
         let modeLabel = UILabel()
-        modeLabel.text = "伪签名模式"
+        modeLabel.text = "伪签名模式 (adhoc)"
         modeLabel.textColor = .white
         modeLabel.font = .systemFont(ofSize: 15, weight: .medium)
         modeLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -165,6 +148,14 @@ class SignViewController: UIViewController {
         contentView.addSubview(modeCard)
         y += 60
 
+        // ---- 引擎信息提示 ----
+        let engineLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 20))
+        engineLabel.text = "🔧 签名引擎：ldid2"
+        engineLabel.textColor = .gray
+        engineLabel.font = .systemFont(ofSize: 12)
+        contentView.addSubview(engineLabel)
+        y += 28
+
         // ---- IPA 选择 ----
         addSectionTitle("IPA 文件", at: &y)
         let ipaBtn = makeButton("选择 IPA 文件", action: #selector(selectIPA))
@@ -179,7 +170,7 @@ class SignViewController: UIViewController {
         contentView.addSubview(ipaLabel)
         y += 24
 
-        // ---- 真签名模式通用控件 ----
+        // ---- 真签名模式：证书相关控件 ----
         if config.mode == .real {
             // 证书密码
             addSectionTitle("证书密码", at: &y)
@@ -230,17 +221,37 @@ class SignViewController: UIViewController {
             }
         }
 
-        // ---- 引擎专属控件 ----
+        // ---- 伪签名模式：ldid2 专属选项 ----
         if config.mode == .adhoc {
-            if config.engine == .ldid2 {
-                addLdid2AdhocOptions(at: &y)
-            } else if config.engine == .zsign {
-                addZsignAdhocOptions(at: &y)
+            addSectionTitle("ldid2 伪签名选项", at: &y)
+
+            let teamLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 20))
+            teamLabel.text = "Team ID（可选）"
+            teamLabel.textColor = .white
+            teamLabel.font = .systemFont(ofSize: 13)
+            contentView.addSubview(teamLabel)
+            y += 24
+
+            let tf = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
+            tf.borderStyle = .roundedRect
+            tf.backgroundColor = .darkGray
+            tf.textColor = .white
+            tf.placeholder = "例如：0000000000"
+            tf.text = config.teamID
+            tf.returnKeyType = .done
+            tf.delegate = self
+            tf.addTarget(self, action: #selector(teamIDChanged(_:)), for: .editingChanged)
+            contentView.addSubview(tf)
+            teamIDField = tf
+            y += 46
+
+            let platformRow = makeSwitchRow("Platform Application", isOn: config.platformApp) { [weak self] on in
+                self?.config.platformApp = on
             }
-        } else {
-            if config.engine == .zsign {
-                addProvisioningTable(at: &y)
-            }
+            platformRow.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
+            contentView.addSubview(platformRow)
+            switchPlatform = platformRow.subviews.compactMap { $0 as? UISwitch }.first
+            y += 52
         }
 
         // ---- 通用修改选项 ----
@@ -356,82 +367,6 @@ class SignViewController: UIViewController {
         scrollView.contentSize = contentView.frame.size
     }
 
-    // MARK: - 引擎专属选项构建
-    private func addLdid2AdhocOptions(at y: inout CGFloat) {
-        addSectionTitle("ldid2 伪签名选项", at: &y)
-
-        let teamLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 20))
-        teamLabel.text = "Team ID（可选）"
-        teamLabel.textColor = .white
-        teamLabel.font = .systemFont(ofSize: 13)
-        contentView.addSubview(teamLabel)
-        y += 24
-
-        let tf = UITextField(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
-        tf.borderStyle = .roundedRect
-        tf.backgroundColor = .darkGray
-        tf.textColor = .white
-        tf.placeholder = "例如：0000000000"
-        tf.text = config.teamID
-        tf.returnKeyType = .done
-        tf.delegate = self
-        tf.addTarget(self, action: #selector(teamIDChanged(_:)), for: .editingChanged)
-        contentView.addSubview(tf)
-        teamIDField = tf
-        y += 46
-
-        let platformRow = makeSwitchRow("Platform Application", isOn: config.platformApp) { [weak self] on in
-            self?.config.platformApp = on
-        }
-        platformRow.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
-        contentView.addSubview(platformRow)
-        switchPlatform = platformRow.subviews.compactMap { $0 as? UISwitch }.first
-        y += 52
-    }
-
-    private func addZsignAdhocOptions(at y: inout CGFloat) {
-        addSectionTitle("zsign 伪签名选项", at: &y)
-        let extraRow = makeSwitchRow("启用额外 Entitlements 合并", isOn: false) { [weak self] on in
-            if on {
-                if !(self?.config.entitlementContent?.contains("<!-- extra flags -->") ?? false) {
-                    self?.config.entitlementContent = (self?.config.entitlementContent ?? "") + "\n<!-- extra flags -->"
-                    self?.entTextView?.text = self?.config.entitlementContent
-                }
-            } else {
-                self?.config.entitlementContent = self?.config.entitlementContent?.replacingOccurrences(of: "\n<!-- extra flags -->", with: "")
-                self?.entTextView?.text = self?.config.entitlementContent
-            }
-        }
-        extraRow.frame = CGRect(x: pad, y: y, width: contentWidth, height: 46)
-        contentView.addSubview(extraRow)
-        zsignAdhocSwitch = extraRow.subviews.compactMap { $0 as? UISwitch }.first
-        y += 52
-    }
-
-    private func addProvisioningTable(at y: inout CGFloat) {
-        addSectionTitle("描述文件（可选）", at: &y)
-        if availableProvisionings.isEmpty {
-            let emptyLabel = UILabel(frame: CGRect(x: pad, y: y, width: contentWidth, height: 36))
-            emptyLabel.text = "没有描述文件"
-            emptyLabel.textColor = .gray
-            emptyLabel.font = .systemFont(ofSize: 13)
-            contentView.addSubview(emptyLabel)
-            y += 40
-        } else {
-            let provTableHeight = min(CGFloat(availableProvisionings.count * 44), 120)
-            let pv = UITableView(frame: CGRect(x: pad, y: y, width: contentWidth, height: provTableHeight))
-            pv.delegate = self
-            pv.dataSource = self
-            pv.backgroundColor = .clear
-            pv.tag = 2
-            pv.isScrollEnabled = false
-            pv.register(UITableViewCell.self, forCellReuseIdentifier: "provCell")
-            contentView.addSubview(pv)
-            provTableView = pv
-            y += provTableHeight + 8
-        }
-    }
-
     // MARK: - UI 更新辅助
     private func updateCertTable() {
         guard let tv = certTableView, tv.superview != nil else { return }
@@ -440,21 +375,7 @@ class SignViewController: UIViewController {
         tv.reloadData()
     }
 
-    private func updateProvisioningTable() {
-        guard let tv = provTableView, tv.superview != nil else { return }
-        let newHeight = min(CGFloat(availableProvisionings.count * 44), 120)
-        tv.frame.size.height = newHeight
-        tv.reloadData()
-    }
-
     // MARK: - Actions
-    @objc private func engineChanged(_ sender: UISegmentedControl) {
-        let oldEngine = config.engine
-        config.engine = sender.selectedSegmentIndex == 0 ? .ldid2 : .zsign
-        config.mode = .adhoc
-        buildUI()
-    }
-
     @objc private func pseudoSwitchChanged(_ sender: UISwitch) {
         config.mode = sender.isOn ? .adhoc : .real
         buildUI()
@@ -679,68 +600,41 @@ class SignViewController: UIViewController {
         ])
         return row
     }
-
-    private func styleSegment(_ seg: UISegmentedControl) {
-        seg.backgroundColor = Theme.card
-        seg.selectedSegmentTintColor = Theme.accent
-        seg.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
-        seg.setTitleTextAttributes([.foregroundColor: UIColor.gray], for: .normal)
-    }
 }
 
 // MARK: - UITableView DataSource & Delegate
 extension SignViewController: UITableViewDelegate, UITableViewDataSource {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if tableView.tag == 1 { return availableCerts.count }
-        if tableView.tag == 2 { return availableProvisionings.count }
         return 0
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: tableView.tag == 1 ? "certCell" : "provCell", for: indexPath)
+        let cell = tableView.dequeueReusableCell(withIdentifier: "certCell", for: indexPath)
         cell.backgroundColor = UIColor(white: 0.08, alpha: 1)
         cell.textLabel?.textColor = .white
         cell.textLabel?.font = .systemFont(ofSize: 13)
         cell.detailTextLabel?.textColor = .gray
         cell.detailTextLabel?.font = .systemFont(ofSize: 11)
 
-        if tableView.tag == 1 {
-            let name = availableCerts[indexPath.row]
-            cell.textLabel?.text = name
-            cell.imageView?.image = UIImage(systemName: "doc.badge.key")
-            cell.imageView?.tintColor = .systemYellow
+        let name = availableCerts[indexPath.row]
+        cell.textLabel?.text = name
+        cell.imageView?.image = UIImage(systemName: "doc.badge.key")
+        cell.imageView?.tintColor = .systemYellow
 
-            let certPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Certificates/\(name)").path
-            cell.accessoryType = (config.certPath == certPath) ? .checkmark : .none
-        } else if tableView.tag == 2 {
-            let name = availableProvisionings[indexPath.row]
-            cell.textLabel?.text = name
-            cell.imageView?.image = UIImage(systemName: "doc.badge.gearshape")
-            cell.imageView?.tintColor = .systemGreen
-
-            let provPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent(name).path
-            cell.accessoryType = (config.provPath == provPath) ? .checkmark : .none
-        }
+        let certPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Certificates/\(name)").path
+        cell.accessoryType = (config.certPath == certPath) ? .checkmark : .none
         return cell
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        if tableView.tag == 1 {
-            let name = availableCerts[indexPath.row]
-            config.certPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Certificates/\(name)").path
-            updateCertTable()
-            outputTextView.text = "✅ 已选择证书: \(name)\n"
-        } else if tableView.tag == 2 {
-            let name = availableProvisionings[indexPath.row]
-            config.provPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent(name).path
-            updateProvisioningTable()
-            outputTextView.text = "✅ 已选择描述文件: \(name)\n"
-        }
+        let name = availableCerts[indexPath.row]
+        config.certPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Certificates/\(name)").path
+        updateCertTable()
+        outputTextView.text = "✅ 已选择证书: \(name)\n"
     }
 }
 
