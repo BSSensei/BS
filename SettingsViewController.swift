@@ -86,9 +86,9 @@ extension SettingsViewController: UITableViewDelegate, UITableViewDataSource {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
         case 0: return 1          // 默认安装方式
-        case 1: return 2          // 签名引擎 + 默认伪签名模式
+        case 1: return 1          // 默认伪签名模式
         case 2: return systemActions.count
-        case 3: return 1          // 默认签名引擎（旧，可保留）
+        case 3: return 0          // 移除旧版引擎选择
         case 4: return 1          // 关于
         default: return 0
         }
@@ -115,21 +115,12 @@ extension SettingsViewController: UITableViewDelegate, UITableViewDataSource {
             cell.accessoryType = .disclosureIndicator
 
         case 1:
-            if indexPath.row == 0 {
-                cell.textLabel?.text = "默认签名引擎"
-                let engine = UserDefaults.standard.string(forKey: "defaultSignEngine") ?? "ldid2"
-                cell.detailTextLabel?.text = engine
-                cell.imageView?.image = UIImage(systemName: "wrench.and.screwdriver.fill")
-                cell.imageView?.tintColor = Theme.accent
-                cell.accessoryType = .disclosureIndicator
-            } else {
-                cell.textLabel?.text = "默认使用伪签名模式"
-                let isPseudo = UserDefaults.standard.bool(forKey: "defaultPseudoMode")
-                cell.detailTextLabel?.text = isPseudo ? "开启" : "关闭"
-                cell.imageView?.image = UIImage(systemName: "switch.2")
-                cell.imageView?.tintColor = Theme.accent
-                cell.accessoryType = .disclosureIndicator
-            }
+            cell.textLabel?.text = "默认使用伪签名模式"
+            let isPseudo = UserDefaults.standard.bool(forKey: "defaultPseudoMode")
+            cell.detailTextLabel?.text = isPseudo ? "开启" : "关闭"
+            cell.imageView?.image = UIImage(systemName: "switch.2")
+            cell.imageView?.tintColor = Theme.accent
+            cell.accessoryType = .disclosureIndicator
 
         case 2:
             let action = systemActions[indexPath.row]
@@ -140,11 +131,8 @@ extension SettingsViewController: UITableViewDelegate, UITableViewDataSource {
             cell.detailTextLabel?.text = nil
 
         case 3:
-            cell.textLabel?.text = "默认签名引擎（兼容旧版）"
-            cell.detailTextLabel?.text = UserDefaults.standard.string(forKey: "defaultSignEngine") ?? "ldid2"
-            cell.accessoryType = .disclosureIndicator
-            cell.imageView?.image = UIImage(systemName: "wrench.and.screwdriver.fill")
-            cell.imageView?.tintColor = Theme.accent
+            // 高级部分已移除
+            break
 
         case 4:
             cell.textLabel?.text = "PermanentStore v1.1"
@@ -167,11 +155,7 @@ extension SettingsViewController: UITableViewDelegate, UITableViewDataSource {
             showInstallMethodPicker()
 
         case 1:
-            if indexPath.row == 0 {
-                showEnginePicker()
-            } else {
-                showPseudoModePicker()
-            }
+            showPseudoModePicker()
 
         case 2:
             let action = systemActions[indexPath.row]
@@ -184,7 +168,7 @@ extension SettingsViewController: UITableViewDelegate, UITableViewDataSource {
             action.action()
 
         case 3:
-            showEnginePicker()
+            break
 
         case 4:
             break
@@ -213,31 +197,6 @@ extension SettingsViewController: UITableViewDelegate, UITableViewDataSource {
                 self.tableView.reloadData()
                 if let view = self.view {
                     Toast.show("已设为：\(method.description)", on: view)
-                }
-            })
-        }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-
-        if let popover = alert.popoverPresentationController {
-            popover.sourceView = view
-            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
-        }
-        present(alert, animated: true)
-    }
-
-    private func showEnginePicker() {
-        let alert = UIAlertController(title: "选择默认引擎", message: nil, preferredStyle: .actionSheet)
-
-        for engine in ["ldid2", "zsign"] {
-            let current = UserDefaults.standard.string(forKey: "defaultSignEngine") ?? "ldid2"
-            alert.addAction(UIAlertAction(
-                title: current == engine ? "✓ \(engine)" : engine,
-                style: .default
-            ) { _ in
-                UserDefaults.standard.set(engine, forKey: "defaultSignEngine")
-                self.tableView.reloadData()
-                if let view = self.view {
-                    Toast.show("默认引擎：\(engine)", on: view)
                 }
             })
         }
