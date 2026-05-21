@@ -5,7 +5,7 @@ class SigningService {
 
     // MARK: - 签名配置
     struct SignConfig {
-        enum Engine: String, CaseIterable { case ldid2, zsign }
+        enum Engine: String, CaseIterable { case ldid2 }
         enum Mode: String, CaseIterable { case adhoc, real }
 
         var engine: Engine = .ldid2
@@ -17,7 +17,6 @@ class SigningService {
         // ---- 证书相关 ----
         var certPath: String?      // 指向 .p12 或 .pem 的路径
         var certPassword: String = "troll" // p12 密码
-        var provPath: String?      // 描述文件 .mobileprovision (zsign 专用)
 
         // ---- Entitlements ----
         var entitlementContent: String?
@@ -53,83 +52,43 @@ class SigningService {
             }
         }
 
-        // 3. 使用 RootHelper 执行命令
+        // 3. 执行签名命令
         return runSignCommand(binaryPath: binaryPath, config: config, entPath: entPath)
     }
 
-    // MARK: - 底层签名命令（使用 RootHelper）
+    // MARK: - 底层签名命令
     private static func runSignCommand(binaryPath: String, config: SignConfig, entPath: String?) -> Bool {
-        var cmd = ""
-
-        switch config.engine {
-        case .ldid2:
-            cmd = "ldid2"
-            
-            // 1. 处理 Entitlements
-            if let ent = entPath { cmd += " -S\(ent)" }
-            
-            // 2. 处理签名模式
-            if config.mode == .adhoc {
-                // ldid2 的伪签名模式（如果需要 TeamID 可以用 -K 参数，但通常伪签不需要）
-                if !config.teamID.isEmpty { cmd += " -K\(config.teamID)" }
-            } else {
-                // 真签名模式：必须使用 p12 证书
-                guard let cert = config.certPath, !cert.isEmpty else { 
-                    print("PermanentStore: ldid2 真签名缺少证书路径")
-                    return false 
-                }
-                // 检查文件是否存在
-                if !FileManager.default.fileExists(atPath: cert) {
-                    print("PermanentStore: 证书文件不存在: \(cert)")
-                    return false
-                }
-                
-                // ✅ 关键修正：使用 -K 指定 p12 文件，-U 指定密码
-                cmd += " -K \(cert)"
-                if !config.certPassword.isEmpty {
-                    cmd += " -U \(config.certPassword)"
-                }
+        var cmd = "ldid2"
+        
+        // 1. 处理 Entitlements
+        if let ent = entPath { cmd += " -S\(ent)" }
+        
+        // 2. 处理签名模式
+        if config.mode == .adhoc {
+            // 伪签名模式
+            if !config.teamID.isEmpty { cmd += " -K\(config.teamID)" }
+        } else {
+            // 真签名模式：必须使用 p12 证书
+            guard let cert = config.certPath, !cert.isEmpty else { 
+                print("PermanentStore: ldid2 真签名缺少证书路径")
+                return false 
             }
-            cmd += " \(binaryPath)"
-
-        case .zsign:
-            cmd = "zsign"
-            
-            // 1. 处理 Entitlements
-            if let ent = entPath { cmd += " -e \(ent)" }
-            
-            // 2. 处理签名模式
-            if config.mode == .adhoc {
-                cmd += " -a" // zsign 的 ad-hoc 模式
-            } else {
-                // 真签名模式
-                guard let cert = config.certPath, !cert.isEmpty else { 
-                    print("PermanentStore: zsign 真签名缺少证书路径")
-                    return false 
-                }
-                if !FileManager.default.fileExists(atPath: cert) {
-                    print("PermanentStore: 证书文件不存在: \(cert)")
-                    return false
-                }
-                
-                // zsign 使用 -k 指定 p12, -p 指定密码
-                cmd += " -k \(cert) -p \(config.certPassword)"
-                
-                // 如果有描述文件
-                if let prov = config.provPath, !prov.isEmpty {
-                    if FileManager.default.fileExists(atPath: prov) {
-                        cmd += " -m \(prov)"
-                    }
-                }
+            if !FileManager.default.fileExists(atPath: cert) {
+                print("PermanentStore: 证书文件不存在: \(cert)")
+                return false
             }
-            cmd += " \(binaryPath)"
+            
+            cmd += " -K \(cert)"
+            if !config.certPassword.isEmpty {
+                cmd += " -U \(config.certPassword)"
+            }
         }
+        cmd += " \(binaryPath)"
 
         print("PermanentStore: 执行签名命令 -> \(cmd)")
         let output = RootHelper.execute(cmd)
         print("PermanentStore: 签名命令输出: \(output)")
         
-        // 简单的成功判断：不包含 error 或 Error
         return !output.lowercased().contains("error") && !output.lowercased().contains("failed")
     }
 
@@ -172,7 +131,6 @@ class SigningService {
         if let custom = config.entitlementContent, !custom.isEmpty {
             return custom
         }
-        // 如果没有自定义 Entitlements，但开启了平台应用或填写了 TeamID，则自动生成
         if config.platformApp || !config.teamID.isEmpty {
             var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n"
             if config.platformApp { xml += "\t<key>platform-application</key>\n\t<true/>\n" }
@@ -256,7 +214,6 @@ struct HistoryStorage {
         }
     }
 
-    /// 批量保存（HistoryViewController 调用）
     static func save(records: [HistoryRecord]) {
         guard let data = try? JSONEncoder().encode(records) else { return }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
