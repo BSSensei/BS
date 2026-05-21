@@ -100,7 +100,7 @@ if [ ! -d libplist_install ]; then
 fi
 echo -e "${GREEN}✅ libplist 完成${NC}"
 
-# ===================== 3. ldid（使用补丁修复）=====================
+# ===================== 3. ldid =====================
 echo -e "\n${YELLOW}📦 [3/4] ldid${NC}"
 
 if [ ! -d "$LDID_SOURCE_DIR" ] || [ ! -f "$LDID_SOURCE_DIR/ldid.cpp" ]; then
@@ -110,140 +110,23 @@ fi
 cd "$BUILD_TEMP" || exit 1
 rm -rf ldid_build
 mkdir -p ldid_build
-cp -r "$LDID_SOURCE_DIR/." ldid_build/
+cp "$LDID_SOURCE_DIR/ldid.cpp" ldid_build/
+
+# 复制补丁文件
+if [ -f "$LDID_SOURCE_DIR/ldid_complete.patch" ]; then
+    cp "$LDID_SOURCE_DIR/ldid_complete.patch" ldid_build/
+fi
+
 cd ldid_build || exit 1
 
-# 应用补丁
-cat > ldid_fix.patch << 'PATCH_END'
---- a/ldid.cpp
-+++ b/ldid.cpp
-@@ -1,3 +1,11 @@
-+#define OPENSSL_API_COMPAT 0x10100000L
-+#define OPENSSL_NO_DEPRECATED 0
-+#include <memory>
-+#include <vector>
-+#include <cstring>
-+#include <openssl/conf.h>
-+#include <openssl/asn1.h>
-+#include <openssl/x509v3.h>
-+
- /*
-  * Copyright (c) 2007-2013, 2017, 2019, 2020, 2021, 2022, 2023
-  *   Jay Freeman (saurik)
-@@ -548,10 +556,12 @@ static inline void get(std::streambuf &stream, void *data, size_t size) {
- }
- 
- static inline void pad(std::streambuf &stream, size_t size) {
--    char padding[size];
--    memset(padding, 0, size);
--    put(stream, padding, size);
-+    std::vector<char> padding(size, 0);
-+    put(stream, padding.data(), size);
- }
-+static void get(std::string &value, const X509_NAME *name, int nid) {
-+    get(value, const_cast<X509_NAME*>(name), nid);
-+}
- 
- template <typename Type_>
- static inline void get(std::streambuf &stream, Type_ &value) {
-@@ -2394,6 +2404,10 @@ static void get(std::string &value, X509_NAME *name, int nid) {
-     if (n < 0)
-         return;
-     X509_NAME_ENTRY *e = X509_NAME_get_entry(name, n);
-+    if (!e) return;
-+    ASN1_STRING *asn = X509_NAME_ENTRY_get_data(e);
-+    const unsigned char *data = ASN1_STRING_get0_data(asn);
-+    value.assign(reinterpret_cast<const char *>(data), ASN1_STRING_length(asn));
- }
- 
- static void req(std::streambuf &buffer, uint32_t value) {
-@@ -2448,9 +2462,9 @@ static identity *load(X509 *cert, EVP_PKEY *key, const std::string &file) {
-     if (name) {
-         std::string org, common, team;
-         if (organization)
--            get(org, name, NID_organizationName);
-+            get(org, const_cast<X509_NAME*>(name), NID_organizationName);
-         if (commonName)
--            get(common, name, NID_commonName);
-+            get(common, const_cast<X509_NAME*>(name), NID_commonName);
-         if (teamIdentifier)
-             get(team, name, NID_organizationalUnitName);
-         
-@@ -3076,10 +3090,13 @@ static void sign_constraints(FILE *file, std::streambuf &stream, const std::vec<
-         std::vector<std::pair<size_t, size_t>> matches_;
-         for (auto flag : flags)
-             if (regexec(&flag.second.first, begin, matches_.size(), nullptr, 0) == 0)
--                matches_.push_back(flag.first);
-+                matches_.push_back(std::make_pair(flag.first.first, flag.first.second));
-+        std::vector<regmatch_t> matches(matches_.size());
-         if (matches_.empty())
-             continue;
-         
-+        for (size_t i = 0; i < matches_.size(); i++)
-+            matches[i] = {matches_[i].first, matches_[i].second};
-         std::string out;
-         if (flags[0].second.second(out, begin, end, &matches[0]))
-             continue;
-@@ -3489,7 +3506,7 @@ int main(int argc, char *argv[])
-         setlocale(LC_ALL, "");
-     }
-     
--    fprintf(stderr, "Link Identity Editor %s\n\n", LDID_VERSION);
-+    fprintf(stderr, "Link Identity Editor %s\n\n", "2.1.5");
-     
-     flag64 = false;
-     flagent = false;
-@@ -4002,7 +4019,7 @@ int main(int argc, char *argv[])
-                         auto *cdhash = reinterpret_cast<cdhash_struct *>(slot.data());
-                         
-                         auto &algorithm(*algorithms[type - 1]);
--                        uint8_t hash[algorithm.size_];
-+                        std::vector<uint8_t> hash(algorithm.size_);
-                         
-                         switch (type) {
-                             case 1:
-@@ -4016,7 +4033,7 @@ int main(int argc, char *argv[])
-                                 SHA256(reinterpret_cast<const unsigned char *>(code.data()), code.size(), hash.data());
-                                 break;
-                         }
--                        _assert(memcmp(cdhash->hash, hash, algorithm.size_) == 0);
-+                        _assert(memcmp(cdhash->hash, hash.data(), algorithm.size_) == 0);
-                         break;
-                     }
-                     default:
-@@ -4085,7 +4102,7 @@ int main(int argc, char *argv[])
-                         const unsigned char *data = reinterpret_cast<const unsigned char *>(code.data());
-                         X509 *x = d2i_X509(NULL, &data, code.size());
-                         if (x) {
--                            X509_NAME *nm = X509_get_subject_name(x);
-+                            const X509_NAME *nm = X509_get_subject_name(x);
-                             // find the team identifier
-                             for (int lastpos = -1;;) {
-                                 int pos = X509_NAME_get_index_by_NID(nm, NID_organizationalUnitName, lastpos);
-@@ -4093,13 +4110,15 @@ int main(int argc, char *argv[])
-                                     break;
-                                 lastpos = pos;
-                                 X509_NAME_ENTRY *e = X509_NAME_get_entry(nm, lastpos);
--                                ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
--                                char *team = reinterpret_cast<char *>(ASN1_STRING_data(s));
--                                _assert(ASN1_STRING_length(s) <= sizeof(identity->team) - 1);
--                                memcpy(identity->team, team, ASN1_STRING_length(s));
--                                identity->team[ASN1_STRING_length(s)] = 0;
-+                                if (e) {
-+                                    ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
-+                                    const unsigned char *team_ptr = ASN1_STRING_get0_data(s);
-+                                    int len = ASN1_STRING_length(s);
-+                                    _assert(len <= static_cast<int>(sizeof(identity->team) - 1));
-+                                    memcpy(identity->team, team_ptr, len);
-+                                    identity->team[len] = 0;
-+                                }
-                             }
-                             identity->cert = x;
-                         }
-PATCH_END
-
-# 应用补丁
-patch -p0 < ldid_fix.patch 2>/dev/null || true
+# 应用补丁（兼容 git apply 和 patch）
+if [ -f ldid_complete.patch ]; then
+    echo -e "${BLUE}🔧 应用补丁...${NC}"
+    git apply ldid_complete.patch 2>/dev/null || patch ldid.cpp < ldid_complete.patch 2>/dev/null || true
+    echo -e "${GREEN}✅ 补丁应用完成${NC}"
+else
+    echo -e "${YELLOW}⚠️ 未找到补丁文件，跳过${NC}"
+fi
 
 # 编译
 echo -e "${BLUE}🛠️ 编译 ldid...${NC}"
@@ -253,6 +136,7 @@ xcrun -sdk iphoneos clang++ -std=c++14 \
     -mios-version-min="$MIN_IOS_VERSION" \
     -I"$BUILD_TEMP/openssl_install/include" \
     -I"$BUILD_TEMP/libplist_install/include" \
+    -L"$BUILD_TEMP/openssl_install/lib" \
     -L"$BUILD_TEMP/libplist_install/lib" \
     -DHAVE_OPENSSL=1 \
     -o "$RESOURCES_OUTPUT/ldid" \
@@ -294,7 +178,7 @@ cp "$INFO_PLIST_FILE" "$APP_DIR/Info.plist"
 cp "$ENTITLEMENTS_FILE" "$APP_DIR/entitlements.plist"
 [ -n "$ICON_FILE" ] && cp "$ICON_FILE" "$APP_DIR/Icon.png"
 cp "$RESOURCES_OUTPUT/ldid" "$APP_DIR/"
-chmod +x "$APP_DIR"/* 2>/dev/null || true
+chmod +x "$APP_DIR/ldid" 2>/dev/null || true
 
 # ===================== 打包 IPA =====================
 cd "$BUILD_TEMP" || exit 1
