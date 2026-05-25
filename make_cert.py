@@ -16,25 +16,20 @@ DAYS = 2912000
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
-# 完整 OID（全部系统认识）
-# ============================================================
-OID_POLICY       = ObjectIdentifier("1.2.840.113635.100.5.1")
-OID_1_1          = ObjectIdentifier("1.2.840.113635.100.6.1.1")
-OID_1_2          = ObjectIdentifier("1.2.840.113635.100.6.1.2")
-OID_1_3          = ObjectIdentifier("1.2.840.113635.100.6.1.3")
-OID_1_4          = ObjectIdentifier("1.2.840.113635.100.6.1.4")
-OID_1_5          = ObjectIdentifier("1.2.840.113635.100.6.1.5")
-OID_1_6          = ObjectIdentifier("1.2.840.113635.100.6.1.6")
-OID_1_7          = ObjectIdentifier("1.2.840.113635.100.6.1.7")
-OID_1_8          = ObjectIdentifier("1.2.840.113635.100.6.1.8")
-OID_1_9          = ObjectIdentifier("1.2.840.113635.100.6.1.9")
-OID_1_10         = ObjectIdentifier("1.2.840.113635.100.6.1.10")
-OID_1_13         = ObjectIdentifier("1.2.840.113635.100.6.1.13")
-OID_1_14         = ObjectIdentifier("1.2.840.113635.100.6.1.14")
-OID_1_19         = ObjectIdentifier("1.2.840.113635.100.6.1.19")
-OID_2_1          = ObjectIdentifier("1.2.840.113635.100.6.2.1")
-OID_3_1          = ObjectIdentifier("1.2.840.113635.100.6.3.1")
-OID_3_2          = ObjectIdentifier("1.2.840.113635.100.6.3.2")
+OID_POLICY = ObjectIdentifier("1.2.840.113635.100.5.1")
+OID_1_1  = ObjectIdentifier("1.2.840.113635.100.6.1.1")
+OID_1_2  = ObjectIdentifier("1.2.840.113635.100.6.1.2")
+OID_1_3  = ObjectIdentifier("1.2.840.113635.100.6.1.3")
+OID_1_4  = ObjectIdentifier("1.2.840.113635.100.6.1.4")
+OID_1_5  = ObjectIdentifier("1.2.840.113635.100.6.1.5")
+OID_1_6  = ObjectIdentifier("1.2.840.113635.100.6.1.6")
+OID_1_7  = ObjectIdentifier("1.2.840.113635.100.6.1.7")
+OID_1_8  = ObjectIdentifier("1.2.840.113635.100.6.1.8")
+OID_1_9  = ObjectIdentifier("1.2.840.113635.100.6.1.9")
+OID_1_10 = ObjectIdentifier("1.2.840.113635.100.6.1.10")
+OID_2_1  = ObjectIdentifier("1.2.840.113635.100.6.2.1")
+OID_3_1  = ObjectIdentifier("1.2.840.113635.100.6.3.1")
+OID_3_2  = ObjectIdentifier("1.2.840.113635.100.6.3.2")
 
 def gen_key():
     return rsa.generate_private_key(65537, 2048, default_backend())
@@ -99,30 +94,12 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
         ]), critical=False)
 
     if not is_ca:
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_1, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_2, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_3, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_4, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_5, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_6, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_7, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_8, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_9, b'\x05\x00'), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_10, b'\x05\x00'), critical=False)
+        for oid in [OID_1_1, OID_1_2, OID_1_3, OID_1_4, OID_1_5,
+                     OID_1_6, OID_1_7, OID_1_8, OID_1_9, OID_1_10, OID_1_14]:
+            builder = builder.add_extension(
+                x509.UnrecognizedExtension(oid, b'\x05\x00'), critical=False)
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_1_13, TEAM_ID.encode()), critical=False)
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_14, b'\x05\x00'), critical=False)
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_1_19, b'\x05\x00'), critical=False)
         builder = builder.add_extension(
@@ -134,6 +111,7 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
 
     return builder.sign(issuer_key, hashes.SHA256(), default_backend())
 
+# ============================================================
 def write_key(path, key):
     with open(path, "wb") as f:
         f.write(key.private_bytes(serialization.Encoding.PEM,
@@ -190,10 +168,6 @@ p12_full = pkcs12.serialize_key_and_certificates(
     b"Apple Development", dev_key, dev_cert, [codeca_cert, root_cert],
     serialization.BestAvailableEncryption(CERT_PASS.encode()))
 with open(f"{OUTPUT_DIR}/fullchain.p12", "wb") as f: f.write(p12_full)
-p12_id = pkcs12.serialize_key_and_certificates(
-    b"Apple Development", dev_key, dev_cert, None,
-    serialization.BestAvailableEncryption(CERT_PASS.encode()))
-with open(f"{OUTPUT_DIR}/identity.p12", "wb") as f: f.write(p12_id)
 print("✅ P12")
 
 # ============================================================
@@ -275,7 +249,7 @@ print("✅ mobileconfig")
 # ============================================================
 print(">>> Base64...")
 for f in os.listdir(OUTPUT_DIR):
-    if f.endswith(('.crt', '.key', '.csr', '.p12', '.txt', '.mobileconfig')):
+    if f.endswith(('.crt', '.p12', '.txt', '.mobileconfig')):
         with open(os.path.join(OUTPUT_DIR, f), 'rb') as src:
             b64 = base64.b64encode(src.read()).decode()
             with open(os.path.join(OUTPUT_DIR, f + '.b64'), 'w') as dst:
