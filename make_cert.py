@@ -19,8 +19,6 @@ CERT_PASS = "1"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
-# Apple OID
-# ============================================================
 OID_CERT_TYPE    = ObjectIdentifier("1.2.840.113635.100.6.2.18")
 OID_POLICY       = ObjectIdentifier("1.2.840.113635.100.5.1")
 OID_WWDR         = ObjectIdentifier("1.2.840.113635.100.6.2.1")
@@ -179,10 +177,10 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
 print(">>> Root CA...")
 root_key = gen_key()
 root_subj = x509.Name([
-    NameOID.COUNTRY_NAME, "US",
-    NameOID.ORGANIZATION_NAME, "Apple Inc.",
-    NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority",
-    NameOID.COMMON_NAME, "Apple Root CA",
+    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Apple Inc."),
+    x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority"),
+    x509.NameAttribute(NameOID.COMMON_NAME, "Apple Root CA"),
 ])
 root_cert = make_cert(root_subj, root_subj, root_key, root_key, ca=True)
 with open(f"{OUTPUT_DIR}/root_cert.crt", "wb") as f:
@@ -198,10 +196,10 @@ print("✅ Root CA")
 print(">>> 中间 CA...")
 codeca_key = gen_key()
 codeca_subj = x509.Name([
-    NameOID.COUNTRY_NAME, "US",
-    NameOID.ORGANIZATION_NAME, "Apple Inc.",
-    NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority",
-    NameOID.COMMON_NAME, "Apple iPhone Certification Authority",
+    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Apple Inc."),
+    x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority"),
+    x509.NameAttribute(NameOID.COMMON_NAME, "Apple iPhone Certification Authority"),
 ])
 codeca_cert = make_cert(codeca_subj, root_subj, root_key, codeca_key, ca=True)
 with open(f"{OUTPUT_DIR}/codeca_cert.crt", "wb") as f:
@@ -217,10 +215,10 @@ print("✅ 中间 CA")
 print(">>> 签名证书...")
 dev_key = gen_key()
 dev_subj = x509.Name([
-    NameOID.COUNTRY_NAME, "US",
-    NameOID.ORGANIZATION_NAME, "Apple Inc.",
-    NameOID.ORGANIZATIONAL_UNIT_NAME, TEAM_ID,
-    NameOID.COMMON_NAME, "Apple Development",
+    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Apple Inc."),
+    x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, TEAM_ID),
+    x509.NameAttribute(NameOID.COMMON_NAME, "Apple Development"),
 ])
 dev_cert = make_cert(dev_subj, codeca_subj, codeca_key, dev_key, leaf=True)
 with open(f"{OUTPUT_DIR}/dev_cert.crt", "wb") as f:
