@@ -32,9 +32,7 @@ OID_1_7  = ObjectIdentifier("1.2.840.113635.100.6.1.7")
 OID_1_8  = ObjectIdentifier("1.2.840.113635.100.6.1.8")
 OID_1_9  = ObjectIdentifier("1.2.840.113635.100.6.1.9")
 OID_1_10 = ObjectIdentifier("1.2.840.113635.100.6.1.10")
-OID_1_15 = ObjectIdentifier("1.2.840.113635.100.6.1.15")  # 备用签名者
 OID_2_1  = ObjectIdentifier("1.2.840.113635.100.6.2.1")
-OID_2_6  = ObjectIdentifier("1.2.840.113635.100.6.2.6")   # 开发者CA（含序列号）
 OID_3_1  = ObjectIdentifier("1.2.840.113635.100.6.3.1")
 OID_3_2  = ObjectIdentifier("1.2.840.113635.100.6.3.2")
 
@@ -114,14 +112,6 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
             builder = builder.add_extension(
                 x509.UnrecognizedExtension(oid, b'\x05\x00'), critical=False)
 
-        # 备用签名者
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_1_15, b'\x05\x00'), critical=False)
-
-        # 开发者 CA（包含随机序列号，模拟真实）
-        fake_serial = ''.join(random.choices(string.hexdigits, k=16)).encode()
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_2_6, fake_serial), critical=False)
 
         # WWDR
         builder = builder.add_extension(
