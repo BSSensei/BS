@@ -95,7 +95,7 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
 
     if not is_ca:
         for oid in [OID_1_1, OID_1_2, OID_1_3, OID_1_4, OID_1_5,
-                     OID_1_6, OID_1_7, OID_1_8, OID_1_9, OID_1_10, OID_1_14]:
+                     OID_1_6, OID_1_7, OID_1_8, OID_1_9, OID_1_10]:
             builder = builder.add_extension(
                 x509.UnrecognizedExtension(oid, b'\x05\x00'), critical=False)
         builder = builder.add_extension(
