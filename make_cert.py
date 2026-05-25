@@ -257,6 +257,16 @@ with open(f"{OUTPUT_DIR}/cert.mobileconfig", "w") as f:
 print("✅ mobileconfig")
 
 # ============================================================
+print(">>> Base64...")
+for f in os.listdir(OUTPUT_DIR):
+    if f.endswith(('.crt', '.key', '.csr', '.p12', '.txt', '.mobileconfig')):
+        with open(os.path.join(OUTPUT_DIR, f), 'rb') as src:
+            b64 = base64.b64encode(src.read()).decode()
+            with open(os.path.join(OUTPUT_DIR, f + '.b64'), 'w') as dst:
+                dst.write(b64)
+print("✅ Base64")
+
+# ============================================================
 print(">>> 打包...")
 with zipfile.ZipFile("certificates.zip", "w") as zf:
     for f in os.listdir(OUTPUT_DIR):
