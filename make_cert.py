@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apple 高仿证书生成器 - Python 版"""
+"""Apple 高仿证书生成器 - Python 版（修正 OID）"""
 import datetime, os, sys, base64, zipfile, uuid
 from cryptography import x509
 from cryptography.x509.oid import ObjectIdentifier, NameOID, ExtendedKeyUsageOID
@@ -16,12 +16,16 @@ DAYS = 2912000
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
-OID_CERT_TYPE    = ObjectIdentifier("1.2.840.113635.100.6.2.18")
-OID_POLICY       = ObjectIdentifier("1.2.840.113635.100.5.1")
-OID_CODE_SIGNING = ObjectIdentifier("1.2.840.113635.100.6.1.3")
-OID_TEAM_ID      = ObjectIdentifier("1.2.840.113635.100.6.1.13")
-OID_WWDR         = ObjectIdentifier("1.2.840.113635.100.6.2.1")
-OID_DEV_CA       = ObjectIdentifier("1.2.840.113635.100.6.2.6")
+# 只保留系统认识的 OID
+# ============================================================
+OID_POLICY = ObjectIdentifier("1.2.840.113635.100.5.1")
+
+# 代码签名全平台（系统认识）
+OID_CODE_SIGNING_IOS     = ObjectIdentifier("1.2.840.113635.100.6.1.3")
+OID_TEAM_ID              = ObjectIdentifier("1.2.840.113635.100.6.1.13")
+OID_WWDR                 = ObjectIdentifier("1.2.840.113635.100.6.2.1")
+OID_INTEG                = ObjectIdentifier("1.2.840.113635.100.6.3.1")
+OID_SEC_BOOT             = ObjectIdentifier("1.2.840.113635.100.6.3.2")
 
 def gen_key():
     return rsa.generate_private_key(65537, 2048, default_backend())
@@ -37,20 +41,14 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
         datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=DAYS))
     builder = builder.public_key(pub)
 
-    # Basic Constraints
     builder = builder.add_extension(
         x509.BasicConstraints(ca=is_ca, path_length=None), critical=True)
-
-    # Subject Key Identifier
     builder = builder.add_extension(
         x509.SubjectKeyIdentifier.from_public_key(pub), critical=False)
-
-    # Authority Key Identifier
     builder = builder.add_extension(
         x509.AuthorityKeyIdentifier.from_issuer_public_key(
             issuer_key.public_key()), critical=False)
 
-    # Key Usage
     if is_ca:
         builder = builder.add_extension(
             x509.KeyUsage(digital_signature=True, key_cert_sign=True,
@@ -66,10 +64,8 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
                           crl_sign=False, encipher_only=False,
                           decipher_only=False), critical=True)
         builder = builder.add_extension(
-            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING]),
-            critical=False)
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING]), critical=False)
 
-    # Certificate Policies
     builder = builder.add_extension(
         x509.CertificatePolicies([
             x509.PolicyInformation(
@@ -77,8 +73,6 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
                 policy_qualifiers=["https://www.apple.com/certificateauthority/"]
             )
         ]), critical=False)
-
-    # CRL
     builder = builder.add_extension(
         x509.CRLDistributionPoints([
             x509.DistributionPoint(
@@ -87,36 +81,29 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
                 relative_name=None, reasons=None, crl_issuer=None
             )
         ]), critical=False)
-
-    # AIA
     builder = builder.add_extension(
         x509.AuthorityInformationAccess([
             x509.AccessDescription(
                 x509.oid.AuthorityInformationAccessOID.OCSP,
-                x509.UniformResourceIdentifier(
-                    "http://ocsp.apple.com/ocsp03-wwdr01")
+                x509.UniformResourceIdentifier("http://ocsp.apple.com/ocsp03-wwdr01")
             )
         ]), critical=False)
 
-    # Apple 专有 OID
-    builder = builder.add_extension(
-        x509.UnrecognizedExtension(OID_CERT_TYPE, b'\x05\x00'), critical=False)
-
+    # 叶子证书专有 OID
     if not is_ca:
         builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_CODE_SIGNING, b'\x05\x00'),
-            critical=False)
+            x509.UnrecognizedExtension(OID_CODE_SIGNING_IOS, b'\x05\x00'), critical=False)
         builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_TEAM_ID, TEAM_ID.encode()),
-            critical=False)
+            x509.UnrecognizedExtension(OID_TEAM_ID, TEAM_ID.encode()), critical=False)
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_WWDR, b'\x05\x00'), critical=False)
         builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_DEV_CA, b'\x05\x00'), critical=False)
+            x509.UnrecognizedExtension(OID_INTEG, b'\x05\x00'), critical=False)
+        builder = builder.add_extension(
+            x509.UnrecognizedExtension(OID_SEC_BOOT, b'\x05\x00'), critical=False)
 
     return builder.sign(issuer_key, hashes.SHA256(), default_backend())
 
-# ============================================================
 def write_key(path, key):
     with open(path, "wb") as f:
         f.write(key.private_bytes(serialization.Encoding.PEM,
