@@ -10,68 +10,51 @@ from cryptography.x509.oid import (
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
-from cryptography.x509.extensions import (
-    SubjectKeyIdentifier,
-    AuthorityKeyIdentifier,
-    CRLDistributionPoints,
-    DistributionPoint,
-    UniformResourceIdentifier,
-    CertificatePolicies,
-    PolicyInformation,
-    AuthorityInformationAccess,
-    AccessDescription,
-)
 from cryptography.hazmat.primitives.serialization import pkcs12
 
-TEAM_ID = sys.argv[1] if len(sys.argv) > 1 else "Apple Inc."
+TEAM_ID = sys.argv[1] if len(sys.argv) > 1 else "59GAB85EFG"
 OUTPUT_DIR = sys.argv[2] if len(sys.argv) > 2 else "./cert_output"
-CERT_PASS = sys.argv[3] if len(sys.argv) > 3 else "1"
+CERT_PASS = "1"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
-# OID 定义
+# Apple OID
 # ============================================================
-OID_LIST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-OID_DER = [ObjectIdentifier(f"1.2.840.113635.100.6.1.{i}") for i in OID_LIST]
-OID_WWDR      = ObjectIdentifier("1.2.840.113635.100.6.2.1")
-OID_CERT_TYPE = ObjectIdentifier("1.2.840.113635.100.6.2.18")
-OID_INTEG     = ObjectIdentifier("1.2.840.113635.100.6.3.1")
-OID_SEC_BOOT  = ObjectIdentifier("1.2.840.113635.100.6.3.2")
-OID_POLICY    = ObjectIdentifier("1.2.840.113635.100.5.1")
-
-# ============================================================
-# Cert Type 扩展值：OCTET STRING { UTF8String "Apple Development" }
-# ============================================================
-def build_cert_type_der(type_name="Apple Development"):
-    utf8_bytes = type_name.encode("utf-8")
-    utf8_der = b'\x0C' + len(utf8_bytes).to_bytes(1, 'big') + utf8_bytes
-    octet_der = b'\x04' + len(utf8_der).to_bytes(1, 'big') + utf8_der
-    return octet_der
-
-CERT_TYPE_DER = build_cert_type_der("Apple Development")
+OID_CERT_TYPE    = ObjectIdentifier("1.2.840.113635.100.6.2.18")
+OID_POLICY       = ObjectIdentifier("1.2.840.113635.100.5.1")
+OID_WWDR         = ObjectIdentifier("1.2.840.113635.100.6.2.1")
+OID_DEV_CA       = ObjectIdentifier("1.2.840.113635.100.6.2.6")
+OID_TEAM_ID      = ObjectIdentifier("1.2.840.113635.100.6.1.13")
+OID_CODE_SIGNING = ObjectIdentifier("1.2.840.113635.100.6.1.3")
 
 def gen_key():
     return rsa.generate_private_key(65537, 2048, default_backend())
 
-def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
-    builder = x509.CertificateBuilder()
-    builder = builder.subject_name(subject)
-    builder = builder.issuer_name(issuer)
-    serial = x509.random_serial_number()
-    serial = abs(serial) & ((1 << 159) - 1)
-    builder = builder.serial_number(serial)
-    builder = builder.not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-    builder = builder.not_valid_after(
-        datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2912000)
-    )
-    pub_key = subject_key.public_key()
-    builder = builder.public_key(pub_key)
-
+def add_apple_extensions(builder, pub_key, issuer_key, ca=False, leaf=False):
+    # 1. BasicConstraints
     if ca:
         builder = builder.add_extension(
             x509.BasicConstraints(ca=True, path_length=None), critical=True
         )
+    else:
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True
+        )
+
+    # 2. SubjectKeyIdentifier
+    builder = builder.add_extension(
+        x509.SubjectKeyIdentifier.from_public_key(pub_key), critical=False
+    )
+
+    # 3. AuthorityKeyIdentifier
+    builder = builder.add_extension(
+        x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()),
+        critical=False,
+    )
+
+    # 4. KeyUsage
+    if ca:
         builder = builder.add_extension(
             x509.KeyUsage(
                 digital_signature=True,
@@ -86,10 +69,7 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
             ),
             critical=True,
         )
-    elif leaf:
-        builder = builder.add_extension(
-            x509.BasicConstraints(ca=False, path_length=None), critical=True
-        )
+    else:
         builder = builder.add_extension(
             x509.KeyUsage(
                 digital_signature=True,
@@ -104,107 +84,128 @@ def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
             ),
             critical=True,
         )
+
+    # 5. ExtendedKeyUsage
+    if leaf:
         builder = builder.add_extension(
-            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING]), critical=False
-        )
-        builder = builder.add_extension(
-            CertificatePolicies([
-                PolicyInformation(
-                    OID_POLICY,
-                    policy_qualifiers=[
-                        "https://www.apple.com/certificateauthority/"
-                    ],
-                )
-            ]),
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING]),
             critical=False,
         )
 
-    # 标准扩展
+    # 6. CertificatePolicies
     builder = builder.add_extension(
-        SubjectKeyIdentifier.from_public_key(pub_key), critical=False
-    )
-    aki = AuthorityKeyIdentifier.from_issuer_public_key(
-        issuer_key.public_key()
-    )
-    builder = builder.add_extension(aki, critical=False)
-
-    crl_dp = CRLDistributionPoints([
-        DistributionPoint(
-            full_name=[UniformResourceIdentifier("http://crl.apple.com/root.crl")],
-            relative_name=None,
-            reasons=None,
-            crl_issuer=None,
-        )
-    ])
-    builder = builder.add_extension(crl_dp, critical=False)
-
-    if not ca or (ca and subject != issuer):
-        aia = AuthorityInformationAccess([
-            AccessDescription(
-                AuthorityInformationAccessOID.OCSP,
-                UniformResourceIdentifier("http://ocsp.apple.com/ocsp03-wwdr01"),
+        x509.CertificatePolicies([
+            x509.PolicyInformation(
+                OID_POLICY,
+                policy_qualifiers=[
+                    "https://www.apple.com/certificateauthority/"
+                ],
             )
-        ])
-        builder = builder.add_extension(aia, critical=False)
+        ]),
+        critical=False,
+    )
 
-    # Apple 自定义扩展
-    for oid in OID_DER:
+    # 7. CRL Distribution Points
+    builder = builder.add_extension(
+        x509.CRLDistributionPoints([
+            x509.DistributionPoint(
+                full_name=[
+                    x509.UniformResourceIdentifier("http://crl.apple.com/root.crl")
+                ],
+                reasons=None,
+                crl_issuer=None,
+            )
+        ]),
+        critical=False,
+    )
+
+    # 8. Authority Information Access
+    builder = builder.add_extension(
+        x509.AuthorityInformationAccess([
+            x509.AccessDescription(
+                AuthorityInformationAccessOID.OCSP,
+                x509.UniformResourceIdentifier("http://ocsp.apple.com/ocsp03-wwdr01"),
+            )
+        ]),
+        critical=False,
+    )
+
+    # 9. Apple 证书类型标记
+    builder = builder.add_extension(
+        x509.UnrecognizedExtension(OID_CERT_TYPE, b'\x05\x00'), critical=False
+    )
+
+    # 10. 代码签名 OID
+    if leaf:
         builder = builder.add_extension(
-            x509.UnrecognizedExtension(oid, b'\x05\x00'), critical=False
+            x509.UnrecognizedExtension(OID_CODE_SIGNING, b'\x05\x00'), critical=False
         )
 
+    # 11. Team ID 明文
+    if leaf:
+        builder = builder.add_extension(
+            x509.UnrecognizedExtension(OID_TEAM_ID, TEAM_ID.encode()), critical=False
+        )
+
+    # 12. WWDR 标记
     if leaf:
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_WWDR, b'\x05\x00'), critical=False
         )
+
+    # 13. 开发者 CA 标记
+    if leaf:
         builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_CERT_TYPE, CERT_TYPE_DER), critical=False
-        )
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_INTEG, b'\x05\x00'), critical=False
-        )
-        builder = builder.add_extension(
-            x509.UnrecognizedExtension(OID_SEC_BOOT, b'\x05\x00'), critical=False
+            x509.UnrecognizedExtension(OID_DEV_CA, b'\x05\x00'), critical=False
         )
 
+    return builder
+
+def make_cert(subject, issuer, issuer_key, subject_key, ca=False, leaf=False):
+    builder = x509.CertificateBuilder()
+    builder = builder.subject_name(subject)
+    builder = builder.issuer_name(issuer)
+    builder = builder.serial_number(x509.random_serial_number())
+    builder = builder.not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+    builder = builder.not_valid_after(
+        datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2912000)
+    )
+    pub_key = subject_key.public_key()
+    builder = builder.public_key(pub_key)
+    builder = add_apple_extensions(builder, pub_key, issuer_key, ca=ca, leaf=leaf)
     return builder.sign(issuer_key, hashes.SHA256(), default_backend())
 
 # ============================================================
 print(">>> Root CA...")
 root_key = gen_key()
 root_subj = x509.Name([
-    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Apple Inc."),
-    x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority"),
-    x509.NameAttribute(NameOID.COMMON_NAME, "Apple Root CA"),
+    NameOID.COUNTRY_NAME, "US",
+    NameOID.ORGANIZATION_NAME, "Apple Inc.",
+    NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority",
+    NameOID.COMMON_NAME, "Apple Root CA",
 ])
 root_cert = make_cert(root_subj, root_subj, root_key, root_key, ca=True)
-root_pem = root_cert.public_bytes(serialization.Encoding.PEM)
 with open(f"{OUTPUT_DIR}/root_cert.crt", "wb") as f:
-    f.write(root_pem)
+    f.write(root_cert.public_bytes(serialization.Encoding.PEM))
 with open(f"{OUTPUT_DIR}/root_key.key", "wb") as f:
     f.write(root_key.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.TraditionalOpenSSL,
         serialization.NoEncryption(),
     ))
-root_b64 = base64.b64encode(root_cert.public_bytes(serialization.Encoding.DER)).decode()
-with open(f"{OUTPUT_DIR}/root_cert_base64.txt", "w") as f:
-    f.write(root_b64)
 print("✅ Root CA")
 
 print(">>> 中间 CA...")
 codeca_key = gen_key()
 codeca_subj = x509.Name([
-    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Apple Inc."),
-    x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority"),
-    x509.NameAttribute(NameOID.COMMON_NAME, "Apple iPhone Certification Authority"),
+    NameOID.COUNTRY_NAME, "US",
+    NameOID.ORGANIZATION_NAME, "Apple Inc.",
+    NameOID.ORGANIZATIONAL_UNIT_NAME, "Apple Certification Authority",
+    NameOID.COMMON_NAME, "Apple iPhone Certification Authority",
 ])
 codeca_cert = make_cert(codeca_subj, root_subj, root_key, codeca_key, ca=True)
-codeca_pem = codeca_cert.public_bytes(serialization.Encoding.PEM)
 with open(f"{OUTPUT_DIR}/codeca_cert.crt", "wb") as f:
-    f.write(codeca_pem)
+    f.write(codeca_cert.public_bytes(serialization.Encoding.PEM))
 with open(f"{OUTPUT_DIR}/codeca_key.key", "wb") as f:
     f.write(codeca_key.private_bytes(
         serialization.Encoding.PEM,
@@ -216,15 +217,14 @@ print("✅ 中间 CA")
 print(">>> 签名证书...")
 dev_key = gen_key()
 dev_subj = x509.Name([
-    x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Apple Inc."),
-    x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, TEAM_ID),
-    x509.NameAttribute(NameOID.COMMON_NAME, "Apple Development"),
+    NameOID.COUNTRY_NAME, "US",
+    NameOID.ORGANIZATION_NAME, "Apple Inc.",
+    NameOID.ORGANIZATIONAL_UNIT_NAME, TEAM_ID,
+    NameOID.COMMON_NAME, "Apple Development",
 ])
 dev_cert = make_cert(dev_subj, codeca_subj, codeca_key, dev_key, leaf=True)
-dev_pem = dev_cert.public_bytes(serialization.Encoding.PEM)
 with open(f"{OUTPUT_DIR}/dev_cert.crt", "wb") as f:
-    f.write(dev_pem)
+    f.write(dev_cert.public_bytes(serialization.Encoding.PEM))
 with open(f"{OUTPUT_DIR}/dev_key.key", "wb") as f:
     f.write(dev_key.private_bytes(
         serialization.Encoding.PEM,
@@ -244,10 +244,52 @@ p12_full = pkcs12.serialize_key_and_certificates(
 )
 with open(f"{OUTPUT_DIR}/fullchain.p12", "wb") as f:
     f.write(p12_full)
-p12_full_b64 = base64.b64encode(p12_full).decode()
-with open(f"{OUTPUT_DIR}/fullchain_base64.txt", "w") as f:
-    f.write(p12_full_b64)
-print("✅ P12 + Base64")
+
+p12_id = pkcs12.serialize_key_and_certificates(
+    b"Apple Development",
+    dev_key,
+    dev_cert,
+    None,
+    serialization.BestAvailableEncryption(CERT_PASS.encode()),
+)
+with open(f"{OUTPUT_DIR}/identity.p12", "wb") as f:
+    f.write(p12_id)
+print("✅ P12")
+
+# ============================================================
+print(">>> 证书链 TXT...")
+def cert_to_text(cert, title):
+    pubkey = cert.public_key()
+    pubkey_pem = pubkey.public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    text = f"""============================================
+  {title}
+============================================
+Subject:      {cert.subject.rfc4514_string()}
+Issuer:       {cert.issuer.rfc4514_string()}
+Serial:       {cert.serial_number}
+Not Before:   {cert.not_valid_before_utc}
+Not After:    {cert.not_valid_after_utc}
+Fingerprint:  {cert.fingerprint(hashes.SHA256()).hex()}
+Public Key:
+{pubkey_pem}
+
+Extensions:
+"""
+    for ext in cert.extensions:
+        text += f"  {ext.oid._name or ext.oid.dotted_string}: {ext.value}\n"
+    return text
+
+with open(f"{OUTPUT_DIR}/certificate_chain.txt", "w") as f:
+    f.write("Apple 高仿证书 — 完整证书链\n\n")
+    f.write(cert_to_text(root_cert, "Apple Root CA"))
+    f.write("\n\n")
+    f.write(cert_to_text(codeca_cert, "Apple iPhone Certification Authority"))
+    f.write("\n\n")
+    f.write(cert_to_text(dev_cert, "Apple Development"))
+print("✅ certificate_chain.txt")
 
 # ============================================================
 print(">>> mobileconfig...")
@@ -293,90 +335,6 @@ mobileconfig = f'''<?xml version="1.0" encoding="UTF-8"?>
 with open(f"{OUTPUT_DIR}/cert.mobileconfig", "w") as f:
     f.write(mobileconfig)
 print("✅ mobileconfig")
-
-# ============================================================
-# 完整证书链 TXT + PEM
-# ============================================================
-print(">>> 完整证书链 TXT + PEM...")
-
-pem_chain = b""
-pem_chain += dev_pem + b"\n"
-pem_chain += codeca_pem + b"\n"
-pem_chain += root_pem + b"\n"
-with open(f"{OUTPUT_DIR}/fullchain.pem", "wb") as f:
-    f.write(pem_chain)
-
-def cert_to_detail_text(cert, title):
-    lines = []
-    lines.append("=" * 60)
-    lines.append(f"  {title}")
-    lines.append("=" * 60)
-    lines.append(f"  Subject      : {cert.subject.rfc4514_string()}")
-    lines.append(f"  Issuer       : {cert.issuer.rfc4514_string()}")
-    lines.append(f"  Serial       : {cert.serial_number}")
-    lines.append(f"  Not Before   : {cert.not_valid_before_utc}")
-    lines.append(f"  Not After    : {cert.not_valid_after_utc}")
-    lines.append(f"  SHA-1        : {cert.fingerprint(hashes.SHA1()).hex(':')}")
-    lines.append(f"  SHA-256      : {cert.fingerprint(hashes.SHA256()).hex(':')}")
-    lines.append(f"  Public Key   : {cert.public_key().__class__.__name__}")
-    lines.append("-" * 40)
-    lines.append("  Extensions:")
-    for ext in cert.extensions:
-        oid_str = ext.oid.dotted_string
-        critical_str = " (critical)" if ext.critical else ""
-        val = ext.value
-        if hasattr(val, 'public_bytes'):
-            val_repr = val.public_bytes().hex()
-        else:
-            val_repr = str(val)
-        if len(val_repr) > 120:
-            val_repr = val_repr[:117] + "..."
-        lines.append(f"    {oid_str}{critical_str}")
-        lines.append(f"      Value: {val_repr}")
-    lines.append("=" * 60)
-    return "\n".join(lines)
-
-chain_text = []
-chain_text.append(cert_to_detail_text(root_cert, "1. Apple Root CA (Self-Signed)"))
-chain_text.append("")
-chain_text.append(cert_to_detail_text(codeca_cert, "2. Apple iPhone Certification Authority"))
-chain_text.append("")
-chain_text.append(cert_to_detail_text(dev_cert, "3. Apple Development (Leaf)"))
-chain_text.append("")
-chain_text.append("=" * 60)
-chain_text.append("  Chain Integrity Verification")
-chain_text.append("=" * 60)
-
-try:
-    codeca_key.public_key().verify(
-        dev_cert.signature,
-        dev_cert.tbs_certificate_bytes,
-        x509.PSS(mgf=x509.MGF1(hashes.SHA256()), salt_length=x509.PSS.DIGEST_LENGTH)
-    )
-    chain_text.append("  ✅ Intermediate -> Leaf: Signature OK")
-except Exception as e:
-    chain_text.append(f"  ❌ Intermediate -> Leaf: {e}")
-
-try:
-    root_key.public_key().verify(
-        codeca_cert.signature,
-        codeca_cert.tbs_certificate_bytes,
-        x509.PSS(mgf=x509.MGF1(hashes.SHA256()), salt_length=x509.PSS.DIGEST_LENGTH)
-    )
-    chain_text.append("  ✅ Root -> Intermediate: Signature OK")
-except Exception as e:
-    chain_text.append(f"  ❌ Root -> Intermediate: {e}")
-
-chain_text.append("=" * 60)
-chain_text.append("")
-chain_text.append("Certificate Chain (PEM):")
-chain_text.append("-" * 40)
-chain_text.append(pem_chain.decode())
-
-full_chain_text = "\n".join(chain_text)
-with open(f"{OUTPUT_DIR}/certificate_chain.txt", "w") as f:
-    f.write(full_chain_text)
-print("✅ certificate_chain.txt")
 
 # ============================================================
 print(">>> 打包...")
