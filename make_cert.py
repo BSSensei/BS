@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Apple 高仿证书生成器 - 完整 OID 版"""
-import datetime, os, sys, base64, zipfile, uuid
+"""Apple 高仿证书生成器 - 终极版"""
+import datetime, os, sys, base64, zipfile, uuid, random, string
 from cryptography import x509
 from cryptography.x509.oid import ObjectIdentifier, NameOID, ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import hashes, serialization
@@ -16,7 +16,12 @@ DAYS = 2912000
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ============================================================
-OID_POLICY = ObjectIdentifier("1.2.840.113635.100.5.1")
+# OID
+# ============================================================
+OID_POLICY_1 = ObjectIdentifier("1.2.840.113635.100.5.1")
+OID_POLICY_2 = ObjectIdentifier("1.2.840.113635.100.5.2")
+OID_POLICY_3 = ObjectIdentifier("1.2.840.113635.100.5.3")
+
 OID_1_1  = ObjectIdentifier("1.2.840.113635.100.6.1.1")
 OID_1_2  = ObjectIdentifier("1.2.840.113635.100.6.1.2")
 OID_1_3  = ObjectIdentifier("1.2.840.113635.100.6.1.3")
@@ -27,7 +32,9 @@ OID_1_7  = ObjectIdentifier("1.2.840.113635.100.6.1.7")
 OID_1_8  = ObjectIdentifier("1.2.840.113635.100.6.1.8")
 OID_1_9  = ObjectIdentifier("1.2.840.113635.100.6.1.9")
 OID_1_10 = ObjectIdentifier("1.2.840.113635.100.6.1.10")
+OID_1_15 = ObjectIdentifier("1.2.840.113635.100.6.1.15")  # 备用签名者
 OID_2_1  = ObjectIdentifier("1.2.840.113635.100.6.2.1")
+OID_2_6  = ObjectIdentifier("1.2.840.113635.100.6.2.6")   # 开发者CA（含序列号）
 OID_3_1  = ObjectIdentifier("1.2.840.113635.100.6.3.1")
 OID_3_2  = ObjectIdentifier("1.2.840.113635.100.6.3.2")
 
@@ -70,13 +77,15 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
         builder = builder.add_extension(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CODE_SIGNING]), critical=False)
 
+    # 多个证书策略
     builder = builder.add_extension(
         x509.CertificatePolicies([
-            x509.PolicyInformation(
-                OID_POLICY,
-                policy_qualifiers=["https://www.apple.com/certificateauthority/"]
-            )
+            x509.PolicyInformation(OID_POLICY_1, policy_qualifiers=[
+                "https://www.apple.com/certificateauthority/"]),
+            x509.PolicyInformation(OID_POLICY_2, policy_qualifiers=None),
+            x509.PolicyInformation(OID_POLICY_3, policy_qualifiers=None),
         ]), critical=False)
+
     builder = builder.add_extension(
         x509.CRLDistributionPoints([
             x509.DistributionPoint(
@@ -93,13 +102,32 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
             )
         ]), critical=False)
 
+    # Subject Alternative Name
+    builder = builder.add_extension(
+        x509.SubjectAlternativeName([
+            x509.RFC822Name("apple@apple.com")
+        ]), critical=False)
+
     if not is_ca:
         for oid in [OID_1_1, OID_1_2, OID_1_3, OID_1_4, OID_1_5,
                      OID_1_6, OID_1_7, OID_1_8, OID_1_9, OID_1_10]:
             builder = builder.add_extension(
                 x509.UnrecognizedExtension(oid, b'\x05\x00'), critical=False)
+
+        # 备用签名者
+        builder = builder.add_extension(
+            x509.UnrecognizedExtension(OID_1_15, b'\x05\x00'), critical=False)
+
+        # 开发者 CA（包含随机序列号，模拟真实）
+        fake_serial = ''.join(random.choices(string.hexdigits, k=16)).encode()
+        builder = builder.add_extension(
+            x509.UnrecognizedExtension(OID_2_6, fake_serial), critical=False)
+
+        # WWDR
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_2_1, b'\x05\x00'), critical=False)
+
+        # 系统完整性 + 安全启动
         builder = builder.add_extension(
             x509.UnrecognizedExtension(OID_3_1, b'\x05\x00'), critical=False)
         builder = builder.add_extension(
@@ -107,7 +135,6 @@ def build_cert(subject, issuer, issuer_key, subject_key, is_ca=False):
 
     return builder.sign(issuer_key, hashes.SHA256(), default_backend())
 
-# ============================================================
 def write_key(path, key):
     with open(path, "wb") as f:
         f.write(key.private_bytes(serialization.Encoding.PEM,
