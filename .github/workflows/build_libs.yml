@@ -115,7 +115,7 @@ jobs:
           make clean
           make FINALPACKAGE=1
           
-          cp .theos/obj/RootHelper ../TrollHelper/Resources/
+          cp .theos/obj/trollstorehelper ../TrollHelper/Resources/RootHelper
           
           cd ../TrollHelper
           export CFLAGS="-I$THEOS/vendor/include"
@@ -124,8 +124,8 @@ jobs:
           make FINALPACKAGE=1
           
           mkdir -p $GITHUB_WORKSPACE/output
-          cp .theos/obj/TrollHelper $GITHUB_WORKSPACE/output/
-          cp ../RootHelper/.theos/obj/RootHelper $GITHUB_WORKSPACE/output/
+          cp .theos/obj/trollstorehelper $GITHUB_WORKSPACE/output/RootHelper
+          cp ../RootHelper/.theos/obj/trollstorehelper $GITHUB_WORKSPACE/output/
           cp ../Exploits/fastPathSign/fastPathSign-ios $GITHUB_WORKSPACE/output/fastPathSign
           
       - uses: actions/upload-artifact@v4
