@@ -23,13 +23,47 @@ jobs:
           cp -r sdks/iPhoneOS16.5.sdk .
           rm -rf sdks
           
+          cd $GITHUB_WORKSPACE/TrollStore
+          
+          # 编译 libarchive
+          curl -LO https://github.com/libarchive/libarchive/releases/download/v3.7.2/libarchive-3.7.2.tar.gz
+          tar -xzf libarchive-3.7.2.tar.gz
+          cd libarchive-3.7.2
+          
+          export SDK_PATH="$THEOS/sdks/iPhoneOS16.5.sdk"
+          
+          ./configure \
+            --host=arm64-apple-darwin \
+            --disable-shared \
+            --enable-static \
+            --without-xml2 \
+            --without-expat \
+            --without-openssl \
+            --without-lzma \
+            --without-zstd \
+            --without-bz2lib \
+            CC="xcrun -sdk iphoneos clang -arch arm64" \
+            CFLAGS="-isysroot $SDK_PATH -miphoneos-version-min=14.0" \
+            LDFLAGS="-isysroot $SDK_PATH"
+          
+          make -j$(sysctl -n hw.ncpu)
+          
+          mkdir -p $THEOS/vendor/include $THEOS/vendor/lib
+          cp libarchive/archive.h $THEOS/vendor/include/
+          cp libarchive/archive_entry.h $THEOS/vendor/include/
+          find . -name "*.a" -exec cp {} $THEOS/vendor/lib/ \;
+          
           cd $GITHUB_WORKSPACE/TrollStore/RootHelper
+          export CFLAGS="-I$THEOS/vendor/include"
+          export LDFLAGS="-L$THEOS/vendor/lib -larchive -lz -liconv"
           make clean
           make FINALPACKAGE=1
           
           cp .theos/obj/RootHelper ../TrollHelper/Resources/
           
           cd ../TrollHelper
+          export CFLAGS="-I$THEOS/vendor/include"
+          export LDFLAGS="-L$THEOS/vendor/lib -larchive -lz -liconv"
           make clean
           make FINALPACKAGE=1
           
