@@ -1,57 +1,38 @@
-name: 构建 iOS 静态库与 IPA（含 ldid）
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
+name: Build
+on: workflow_dispatch
 jobs:
   build:
-    runs-on: macos-latest
-    
+    runs-on: macos-14
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: true  # 保留凭据，避免后续克隆失败
-
-      - name: 安装编译依赖
+      - uses: actions/checkout@v4
+      
+      - name: Build
         run: |
-          brew install cmake make git autoconf automake libtool pkg-config
-
-      - name: 修复 Git 认证（核心修复）
-        run: |
-          # 禁用所有凭据助手，避免交互式密码提示
-          git config --global --unset-all credential.helper || true
-          # 禁止终端密码提示
-          export GIT_TERMINAL_PROMPT=0
-          # 强制使用匿名 HTTPS 克隆（不携带令牌）
-          git config --global url."https://github.com/".insteadOf "https://github.com/"
-
-      - name: 执行构建脚本
-        id: build
-        run: |
-          chmod +x scripts/build_all.sh
-          bash scripts/build_all.sh
-        continue-on-error: true  # 允许构建失败，继续执行后续步骤
-
-      - name: 上传静态库（仅成功时）
-        if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+          git clone --recursive https://github.com/opa334/TrollStore.git
+          cd TrollStore
+          
+          export THEOS=~/theos
+          git clone --recursive https://github.com/theos/theos.git $THEOS
+          
+          cd $THEOS/sdks
+          curl -LO https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz
+          tar -xf iPhoneOS16.5.sdk.tar.xz
+          
+          cd $GITHUB_WORKSPACE/TrollStore/RootHelper
+          make clean
+          make FINALPACKAGE=1
+          
+          cp .theos/obj/RootHelper ../TrollHelper/Resources/
+          
+          cd ../TrollHelper
+          make clean
+          make FINALPACKAGE=1
+          
+          mkdir -p $GITHUB_WORKSPACE/output
+          cp .theos/obj/TrollHelper $GITHUB_WORKSPACE/output/
+          cp ../RootHelper/.theos/obj/RootHelper $GITHUB_WORKSPACE/output/
+          
+      - uses: actions/upload-artifact@v4
         with:
-          name: ios-static-libs
-          path: Frameworks/
-
-      - name: 上传 IPA（仅成功时）
-        if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: PermanentStore-IPA
-          path: IPA/
-
-      - name: 上传构建日志（无论成败都执行）
-        if: always()  # 关键：强制运行，不管前面步骤是否失败
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: scripts/build_log.txt.gz  # 匹配脚本生成的日志路径
+          name: binaries
+          path: output/*
