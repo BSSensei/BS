@@ -60,28 +60,34 @@ jobs:
           make clean 2>/dev/null || true
           make
           
-          if [ ! -f "fastPathSign" ]; then
-            clang -o fastPathSign \
-              src/coretrust_bug.c \
-              src/codesign.m \
-              -framework Foundation \
-              -framework Security \
-              -framework CoreFoundation \
-              -I../../ChOma/src \
-              -I./src
-          fi
-          
           # 编译 fastPathSign (iOS版本保存)
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -isysroot $SDK_PATH \
             -miphoneos-version-min=14.0 \
             -o fastPathSign-ios \
-            src/coretrust_bug.c \
             src/codesign.m \
+            src/main.m \
+            src/coretrust_bug.c \
+            ../../ChOma/src/Base64.c \
+            ../../ChOma/src/BufferedStream.c \
+            ../../ChOma/src/CSBlob.c \
+            ../../ChOma/src/CodeDirectory.c \
+            ../../ChOma/src/FAT.c \
+            ../../ChOma/src/FileStream.c \
+            ../../ChOma/src/Host.c \
+            ../../ChOma/src/MachO.c \
+            ../../ChOma/src/MachOLoadCommand.c \
+            ../../ChOma/src/MemoryStream.c \
+            ../../ChOma/src/PatchFinder.c \
+            ../../ChOma/src/PatchFinder_arm64.c \
+            ../../ChOma/src/Util.c \
+            ../../ChOma/src/arm64.c \
             -framework Foundation \
             -framework Security \
             -framework CoreFoundation \
+            -framework CoreServices \
+            -fobjc-arc \
             -I../../ChOma/src \
             -I./src
           
