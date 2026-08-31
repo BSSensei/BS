@@ -17,9 +17,11 @@ jobs:
           export THEOS=~/theos
           git clone --recursive https://github.com/theos/theos.git $THEOS
           
+          mkdir -p $THEOS/sdks
           cd $THEOS/sdks
-          curl -LO https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz
-          tar -xf iPhoneOS16.5.sdk.tar.xz
+          git clone --depth 1 https://github.com/theos/sdks.git
+          cp -r sdks/iPhoneOS16.5.sdk .
+          rm -rf sdks
           
           cd $GITHUB_WORKSPACE/TrollStore/RootHelper
           make clean
