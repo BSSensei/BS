@@ -67,6 +67,7 @@ jobs:
               -framework Foundation \
               -framework Security \
               -framework CoreFoundation \
+              -I../../ChOma/src \
               -I./src
           fi
           
@@ -81,6 +82,7 @@ jobs:
             -framework Foundation \
             -framework Security \
             -framework CoreFoundation \
+            -I../../ChOma/src \
             -I./src
           
           cd $GITHUB_WORKSPACE/TrollStore/RootHelper
