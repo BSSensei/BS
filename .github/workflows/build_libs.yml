@@ -1,152 +1,50 @@
-name: Build
+name: Build TrollStore Rust for iOS
+
 on:
   push:
-    branches: [ main, master ]
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
+
 jobs:
-  build:
-    runs-on: macos-14
+  build-ios:
+    runs-on: macos-latest
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Build
-        run: |
-          git clone --recursive https://github.com/opa334/TrollStore.git
-          cd TrollStore
-          
-          export THEOS=~/theos
-          git clone --recursive https://github.com/theos/theos.git $THEOS
-          
-          mkdir -p $THEOS/sdks
-          cd $THEOS/sdks
-          git clone --depth 1 https://github.com/theos/sdks.git
-          cp -r sdks/iPhoneOS16.5.sdk .
-          rm -rf sdks
-          
-          export SDK_PATH="$THEOS/sdks/iPhoneOS16.5.sdk"
-          
-          cd $GITHUB_WORKSPACE/TrollStore
-          
-          # 编译 libarchive
-          curl -LO https://github.com/libarchive/libarchive/releases/download/v3.7.2/libarchive-3.7.2.tar.gz
-          tar -xzf libarchive-3.7.2.tar.gz
-          cd libarchive-3.7.2
-          
-          ./configure \
-            --host=arm64-apple-darwin \
-            --disable-shared \
-            --enable-static \
-            --without-xml2 \
-            --without-expat \
-            --without-openssl \
-            --without-lzma \
-            --without-zstd \
-            --without-bz2lib \
-            CC="xcrun -sdk iphoneos clang -arch arm64" \
-            CFLAGS="-isysroot $SDK_PATH -miphoneos-version-min=14.0" \
-            LDFLAGS="-isysroot $SDK_PATH"
-          
-          make -j$(sysctl -n hw.ncpu)
-          
-          mkdir -p $THEOS/vendor/include $THEOS/vendor/lib
-          cp libarchive/archive.h $THEOS/vendor/include/
-          cp libarchive/archive_entry.h $THEOS/vendor/include/
-          find . -name "*.a" -exec cp {} $THEOS/vendor/lib/ \;
-          
-          cd $GITHUB_WORKSPACE/TrollStore
-          
-          # 编译 OpenSSL for iOS
-          curl -LO https://github.com/openssl/openssl/releases/download/openssl-3.0.12/openssl-3.0.12.tar.gz
-          tar -xzf openssl-3.0.12.tar.gz
-          cd openssl-3.0.12
-          
-          ./Configure ios64-cross no-shared no-dso no-hw no-engine \
-            --prefix=$THEOS/vendor \
-            CC="xcrun -sdk iphoneos clang -arch arm64" \
-            CFLAGS="-isysroot $SDK_PATH -miphoneos-version-min=14.0"
-          
-          make -j$(sysctl -n hw.ncpu)
-          make install_sw
-          
-          cd $GITHUB_WORKSPACE/TrollStore
-          
-          # 编译 fastPathSign (macOS版本)
-          cd Exploits/fastPathSign
-          make clean 2>/dev/null || true
-          make
-          
-          # 编译 fastPathSign (iOS版本)
-          xcrun -sdk iphoneos clang \
-            -arch arm64 \
-            -isysroot $SDK_PATH \
-            -miphoneos-version-min=14.0 \
-            -o fastPathSign-ios \
-            src/codesign.m \
-            src/main.m \
-            src/coretrust_bug.c \
-            ../../ChOma/src/Base64.c \
-            ../../ChOma/src/BufferedStream.c \
-            ../../ChOma/src/CSBlob.c \
-            ../../ChOma/src/CodeDirectory.c \
-            ../../ChOma/src/FAT.c \
-            ../../ChOma/src/FileStream.c \
-            ../../ChOma/src/Host.c \
-            ../../ChOma/src/MachO.c \
-            ../../ChOma/src/MachOLoadCommand.c \
-            ../../ChOma/src/MemoryStream.c \
-            ../../ChOma/src/PatchFinder.c \
-            ../../ChOma/src/PatchFinder_arm64.c \
-            ../../ChOma/src/Util.c \
-            ../../ChOma/src/arm64.c \
-            -framework Foundation \
-            -framework Security \
-            -framework CoreFoundation \
-            -framework CoreServices \
-            -fobjc-arc \
-            -I../../ChOma/src \
-            -I./src \
-            -I$THEOS/vendor/include \
-            -L$THEOS/vendor/lib \
-            -lcrypto
-          
-          cd $GITHUB_WORKSPACE/TrollStore/RootHelper
-          export CFLAGS="-I$THEOS/vendor/include"
-          export LDFLAGS="-L$THEOS/vendor/lib -larchive -lz -liconv"
-          make clean
-          make FINALPACKAGE=1
-          
-          echo "=== RootHelper 构建完成，查找文件 ==="
-          find .theos -type f | grep -v ".o$" | grep -v ".d$"
-          
-          # 复制所有可执行文件
-          mkdir -p ../TrollHelper/Resources
-          find .theos -type f -perm +111 | while read f; do
-            cp "$f" ../TrollHelper/Resources/RootHelper
-            echo "Copied: $f"
-          done
-          
-          cd ../TrollHelper
-          export CFLAGS="-I$THEOS/vendor/include"
-          export LDFLAGS="-L$THEOS/vendor/lib -larchive -lz -liconv"
-          make clean
-          make FINALPACKAGE=1
-          
-          echo "=== TrollHelper 构建完成，查找文件 ==="
-          find .theos -type f | grep -v ".o$" | grep -v ".d$"
-          
-          mkdir -p $GITHUB_WORKSPACE/output
-          find .theos -type f -perm +111 | while read f; do
-            cp "$f" $GITHUB_WORKSPACE/output/
-            echo "Copied: $f"
-          done
-          
-          cp ../TrollHelper/Resources/RootHelper $GITHUB_WORKSPACE/output/
-          cp ../Exploits/fastPathSign/fastPathSign-ios $GITHUB_WORKSPACE/output/fastPathSign
-          
-          echo "=== 输出文件 ==="
-          ls -la $GITHUB_WORKSPACE/output/
-          
-      - uses: actions/upload-artifact@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: binaries
-          path: output/*
+          targets: aarch64-apple-ios
+
+      - name: Setup Cargo config for iOS cross-compilation
+        run: |
+          mkdir -p .cargo
+          cat << 'EOF' > .cargo/config.toml
+          [target.aarch64-apple-ios]
+          linker = "cc"
+          rustflags = ["-C", "link-args=-arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=14.0"]
+          EOF
+
+      - name: Extract resources from TrollStore.zip
+        run: |
+          mkdir -p resources
+          if [ -f "TrollStore.zip" ]; then
+            unzip -o TrollStore.zip -d resources/
+            chmod +x resources/ldid resources/RootHelper resources/TrollHelper resources/fastPathSign 2>/dev/null || true
+          else
+            echo "Error: TrollStore.zip not found in repository root."
+            exit 1
+          fi
+
+      - name: Build for iOS (arm64)
+        run: cargo build --release --target aarch64-apple-ios
+
+      - name: Upload compiled binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: trollstore-rs-ios-binary
+          path: target/aarch64-apple-ios/release/trollstore-rs
