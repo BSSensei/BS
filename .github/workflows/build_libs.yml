@@ -53,6 +53,36 @@ jobs:
           cp libarchive/archive_entry.h $THEOS/vendor/include/
           find . -name "*.a" -exec cp {} $THEOS/vendor/lib/ \;
           
+          cd $GITHUB_WORKSPACE/TrollStore
+          
+          # 编译 fastPathSign (macOS版本用于签名)
+          cd Exploits/fastPathSign
+          make clean 2>/dev/null || true
+          make
+          
+          if [ ! -f "fastPathSign" ]; then
+            clang -o fastPathSign \
+              src/coretrust_bug.c \
+              src/codesign.m \
+              -framework Foundation \
+              -framework Security \
+              -framework CoreFoundation \
+              -I./src
+          fi
+          
+          # 编译 fastPathSign (iOS版本保存)
+          xcrun -sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot $SDK_PATH \
+            -miphoneos-version-min=14.0 \
+            -o fastPathSign-ios \
+            src/coretrust_bug.c \
+            src/codesign.m \
+            -framework Foundation \
+            -framework Security \
+            -framework CoreFoundation \
+            -I./src
+          
           cd $GITHUB_WORKSPACE/TrollStore/RootHelper
           export CFLAGS="-I$THEOS/vendor/include"
           export LDFLAGS="-L$THEOS/vendor/lib -larchive -lz -liconv"
@@ -70,6 +100,7 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/output
           cp .theos/obj/TrollHelper $GITHUB_WORKSPACE/output/
           cp ../RootHelper/.theos/obj/RootHelper $GITHUB_WORKSPACE/output/
+          cp ../Exploits/fastPathSign/fastPathSign-ios $GITHUB_WORKSPACE/output/fastPathSign
           
       - uses: actions/upload-artifact@v4
         with:
