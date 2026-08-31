@@ -70,7 +70,7 @@ jobs:
           
           cd $GITHUB_WORKSPACE/TrollStore
           
-          # 编译 fastPathSign (macOS版本用于构建时签名)
+          # 编译 fastPathSign (macOS版本)
           cd Exploits/fastPathSign
           make clean 2>/dev/null || true
           make
@@ -115,7 +115,15 @@ jobs:
           make clean
           make FINALPACKAGE=1
           
-          cp .theos/obj/trollstorehelper ../TrollHelper/Resources/RootHelper
+          echo "=== RootHelper 构建完成，查找文件 ==="
+          find .theos -type f | grep -v ".o$" | grep -v ".d$"
+          
+          # 复制所有可执行文件
+          mkdir -p ../TrollHelper/Resources
+          find .theos -type f -perm +111 | while read f; do
+            cp "$f" ../TrollHelper/Resources/RootHelper
+            echo "Copied: $f"
+          done
           
           cd ../TrollHelper
           export CFLAGS="-I$THEOS/vendor/include"
@@ -123,10 +131,20 @@ jobs:
           make clean
           make FINALPACKAGE=1
           
+          echo "=== TrollHelper 构建完成，查找文件 ==="
+          find .theos -type f | grep -v ".o$" | grep -v ".d$"
+          
           mkdir -p $GITHUB_WORKSPACE/output
-          cp .theos/obj/trollstorehelper $GITHUB_WORKSPACE/output/RootHelper
-          cp ../RootHelper/.theos/obj/trollstorehelper $GITHUB_WORKSPACE/output/
+          find .theos -type f -perm +111 | while read f; do
+            cp "$f" $GITHUB_WORKSPACE/output/
+            echo "Copied: $f"
+          done
+          
+          cp ../TrollHelper/Resources/RootHelper $GITHUB_WORKSPACE/output/
           cp ../Exploits/fastPathSign/fastPathSign-ios $GITHUB_WORKSPACE/output/fastPathSign
+          
+          echo "=== 输出文件 ==="
+          ls -la $GITHUB_WORKSPACE/output/
           
       - uses: actions/upload-artifact@v4
         with:
