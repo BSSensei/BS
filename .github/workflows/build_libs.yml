@@ -20,31 +20,76 @@ jobs:
         with:
           targets: aarch64-apple-ios
 
+      - name: Extract and Auto-Fix Project Structure
+        run: |
+          # 1. 解压 zip 到临时目录
+          mkdir -p extracted
+          unzip -o TrollStore.zip -d extracted
+          
+          # 2. 自动寻找 Cargo.toml 的位置 (无论它被解压到了哪一层)
+          CARGO_FILE=$(find extracted -name "Cargo.toml" -maxdepth 3 | head -n 1)
+          if [ -z "$CARGO_FILE" ]; then
+            echo "Error: Cargo.toml not found in zip!"
+            exit 1
+          fi
+          
+          PROJECT_DIR=$(dirname "$CARGO_FILE")
+          echo "Found project directory: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          
+          cd "$PROJECT_DIR"
+          
+          # 3. 自动修复 Rust 源码结构 (将平铺的 .rs 移入 src/)
+          if [ ! -d "src" ]; then
+            echo "Auto-fixing: Moving .rs files into src/ directory..."
+            mkdir -p src/core
+            
+            # 移动根目录级源码
+            for file in main.rs ui.rs error.rs; do
+              if [ -f "$file" ]; then mv "$file" src/; fi
+            done
+            
+            # 移动核心模块源码
+            for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do
+              if [ -f "$file" ]; then mv "$file" src/core/; fi
+            done
+          fi
+          
+          # 4. 整理 resources 目录 (供 rust-embed 宏读取)
+          mkdir -p resources
+          for bin in ldid RootHelper TrollHelper fastPathSign; do
+            if [ -f "$bin" ]; then mv "$bin" resources/; fi
+          done
+          
+          # 处理 Resources.zip 或 Resources 文件夹
+          if [ -d "Resources" ]; then
+            mv Resources resources/
+          elif [ -f "Resources.zip" ]; then
+            mv Resources.zip resources/
+            cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..
+          fi
+          
+          # 赋予执行权限
+          chmod +x resources/ldid resources/RootHelper resources/TrollHelper resources/fastPathSign 2>/dev/null || true
+          
+          echo "--- Final Project Structure ---"
+          ls -R
+
       - name: Setup Cargo config for iOS cross-compilation
         run: |
-          mkdir -p .cargo
-          cat << 'EOF' > .cargo/config.toml
+          mkdir -p "$PROJECT_DIR/.cargo"
+          cat << 'EOF' > "$PROJECT_DIR/.cargo/config.toml"
           [target.aarch64-apple-ios]
           linker = "cc"
           rustflags = ["-C", "link-args=-arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=14.0"]
           EOF
 
-      - name: Extract resources from TrollStore.zip
-        run: |
-          mkdir -p resources
-          if [ -f "TrollStore.zip" ]; then
-            unzip -o TrollStore.zip -d resources/
-            chmod +x resources/ldid resources/RootHelper resources/TrollHelper resources/fastPathSign 2>/dev/null || true
-          else
-            echo "Error: TrollStore.zip not found in repository root."
-            exit 1
-          fi
-
       - name: Build for iOS (arm64)
+        working-directory: ${{ env.PROJECT_DIR }}
         run: cargo build --release --target aarch64-apple-ios
 
       - name: Upload compiled binary
         uses: actions/upload-artifact@v4
         with:
           name: trollstore-rs-ios-binary
-          path: target/aarch64-apple-ios/release/trollstore-rs
+          path: ${{ env.PROJECT_DIR }}/target/aarch64-apple-ios/release/trollstore-rs
