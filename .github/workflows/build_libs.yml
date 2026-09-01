@@ -1,6 +1,11 @@
-name: Build TrollStore Rust for iOS (From Zip)
+name: Build TrollStore Rust for iOS
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build-ios:
@@ -15,15 +20,7 @@ jobs:
         with:
           targets: aarch64-apple-ios
 
-      - name: Extract entire project
-        run: |
-          unzip -o TrollStore.zip -d ./project
-          # 确保资源目录存在且权限正确
-          mkdir -p ./project/resources
-          chmod +x ./project/resources/ldid ./project/resources/RootHelper ./project/resources/TrollHelper ./project/resources/fastPathSign 2>/dev/null || true
-
-      - name: Setup Cargo config
-        working-directory: ./project
+      - name: Setup Cargo config for iOS cross-compilation
         run: |
           mkdir -p .cargo
           cat << 'EOF' > .cargo/config.toml
@@ -32,12 +29,22 @@ jobs:
           rustflags = ["-C", "link-args=-arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=14.0"]
           EOF
 
+      - name: Extract resources from TrollStore.zip
+        run: |
+          mkdir -p resources
+          if [ -f "TrollStore.zip" ]; then
+            unzip -o TrollStore.zip -d resources/
+            chmod +x resources/ldid resources/RootHelper resources/TrollHelper resources/fastPathSign 2>/dev/null || true
+          else
+            echo "Error: TrollStore.zip not found in repository root."
+            exit 1
+          fi
+
       - name: Build for iOS (arm64)
-        working-directory: ./project
         run: cargo build --release --target aarch64-apple-ios
 
       - name: Upload compiled binary
         uses: actions/upload-artifact@v4
         with:
           name: trollstore-rs-ios-binary
-          path: project/target/aarch64-apple-ios/release/trollstore-rs
+          path: target/aarch64-apple-ios/release/trollstore-rs
