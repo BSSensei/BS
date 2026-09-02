@@ -1,4 +1,4 @@
-name: Build and Package TrollStore Rust IPA
+name: Build and Package TrollStore Rust (Standard Device Test)
 
 on:
   push:
@@ -8,9 +8,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Extract and Auto-Fix Project Structure
+        run: |
+          mkdir -p extracted
+          unzip -o TrollStore.zip -d extracted
+          CARGO_FILE=$(find extracted -name "Cargo.toml" -maxdepth 3 | head -n 1)
+          PROJECT_DIR=$(dirname "$CARGO_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          cd "$PROJECT_DIR"
+          if [ ! -d "src" ]; then
+            mkdir -p src/core
+            for file in main.rs ui.rs error.rs; do [ -f "$file" ] && mv "$file" src/; done
+            for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do [ -f "$file" ] && mv "$file" src/core/; done
+          fi
+          mkdir -p resources
+          for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
+          if [ -d "Resources" ]; then mv Resources resources/; elif [ -f "Resources.zip" ]; then mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..; fi
+
+      - name: Run Host Tests (Core Logic)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: cargo run
+
   build-ios-ipa:
     runs-on: macos-latest
-
+    needs: test-macos
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,37 +54,18 @@ jobs:
         run: |
           mkdir -p extracted
           unzip -o TrollStore.zip -d extracted
-          
           CARGO_FILE=$(find extracted -name "Cargo.toml" -maxdepth 3 | head -n 1)
-          if [ -z "$CARGO_FILE" ]; then
-            echo "Error: Cargo.toml not found in zip!"
-            exit 1
-          fi
-          
           PROJECT_DIR=$(dirname "$CARGO_FILE")
-          echo "Found project directory: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          
           cd "$PROJECT_DIR"
-          
           if [ ! -d "src" ]; then
-            echo "Auto-fixing: Moving .rs files into src/ directory..."
             mkdir -p src/core
             for file in main.rs ui.rs error.rs; do [ -f "$file" ] && mv "$file" src/; done
             for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do [ -f "$file" ] && mv "$file" src/core/; done
           fi
-          
           mkdir -p resources
           for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
-          
-          if [ -d "Resources" ]; then
-            mv Resources resources/
-          elif [ -f "Resources.zip" ]; then
-            mv Resources.zip resources/
-            cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..
-          fi
-          
-          chmod +x resources/ldid resources/RootHelper resources/TrollHelper resources/fastPathSign 2>/dev/null || true
+          if [ -d "Resources" ]; then mv Resources resources/; elif [ -f "Resources.zip" ]; then mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..; fi
 
       - name: Setup iOS Environment Variables
         run: |
@@ -65,45 +76,32 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: cargo build --release --target aarch64-apple-ios
 
-      - name: Package as iOS App (IPA)
+      - name: Package as Clean iOS App (IPA) for Standard Devices
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "Starting iOS App packaging process..."
-          
-          # 1. 创建标准的 iOS Payload 结构
+          echo "Packaging clean IPA for Sideloadly / Standard Devices..."
           mkdir -p Payload/TrollStore.app
           
-          # 2. 复制编译好的 Rust 核心二进制文件
+          # 1. 复制主程序二进制
           cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
           
-          # 3. 解压 UI 资源 (Info.plist, AppIcon, entitlements)
+          # 2. 复制 UI 资源，但【严格排除】 entitlements.plist
           if [ -d "resources/Resources" ]; then
-            cp -R resources/Resources/* Payload/TrollStore.app/
-          elif [ -d "resources" ] && [ -f "resources/Info.plist" ]; then
-            cp resources/Info.plist Payload/TrollStore.app/
-            cp resources/AppIcon*.png Payload/TrollStore.app/ 2>/dev/null || true
-            cp resources/entitlements.plist Payload/TrollStore.app/ 2>/dev/null || true
+            rsync -av --exclude='entitlements.plist' resources/Resources/ Payload/TrollStore.app/
           fi
           
-          # 4. 将核心工具链物理放入 App Bundle (供应用在真机上调用)
-          mkdir -p Payload/TrollStore.app/Binaries
-          cp resources/ldid Payload/TrollStore.app/Binaries/
-          cp resources/RootHelper Payload/TrollStore.app/Binaries/
-          cp resources/TrollHelper Payload/TrollStore.app/Binaries/
-          cp resources/fastPathSign Payload/TrollStore.app/Binaries/
+          # 3. 【关键】不复制 Binaries 目录 (ldid, RootHelper 等)
+          # 普通 iOS 设备在安装时会校验 Bundle 内所有文件的签名。
+          # 包含未签名的辅助工具会导致 Sideloadly 签名失败或设备拒绝安装。
           
-          # 5. 赋予执行权限
           chmod +x Payload/TrollStore.app/TrollStore
-          chmod +x Payload/TrollStore.app/Binaries/*
           
-          # 6. 压缩成标准的 .ipa 文件
-          # 注意：跳过在 macOS 上执行 ldid 签名，因为 iOS 二进制无法在 macOS 运行。
-          # 真机上的 TrollStore 安装此 IPA 时，会自动读取 entitlements.plist 并完成伪签名。
-          zip -r TrollStore-Rust.ipa Payload
-          echo "✅ IPA package created: TrollStore-Rust.ipa"
+          # 4. 打包
+          zip -r TrollStore-Rust-Standard.ipa Payload
+          echo "✅ Clean IPA created. Ready for Sideloadly / AltStore."
 
-      - name: Upload Final IPA Artifact
+      - name: Upload Clean IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TrollStore-Rust-IPA-Release
-          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust.ipa
+          name: TrollStore-Rust-Standard-IPA
+          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust-Standard.ipa
