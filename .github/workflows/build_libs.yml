@@ -1,4 +1,4 @@
-name: Build TrollStore Rust for iOS
+name: Build and Package TrollStore Rust IPA
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-ios:
+  build-ios-ipa:
     runs-on: macos-latest
 
     steps:
@@ -37,24 +37,19 @@ jobs:
           
           cd "$PROJECT_DIR"
           
+          # 自动修复 Rust 源码结构
           if [ ! -d "src" ]; then
             echo "Auto-fixing: Moving .rs files into src/ directory..."
             mkdir -p src/core
-            
-            for file in main.rs ui.rs error.rs; do
-              if [ -f "$file" ]; then mv "$file" src/; fi
-            done
-            
-            for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do
-              if [ -f "$file" ]; then mv "$file" src/core/; fi
-            done
+            for file in main.rs ui.rs error.rs; do [ -f "$file" ] && mv "$file" src/; done
+            for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do [ -f "$file" ] && mv "$file" src/core/; done
           fi
           
+          # 确保 resources 目录存在，供 rust-embed 打包进二进制
           mkdir -p resources
-          for bin in ldid RootHelper TrollHelper fastPathSign; do
-            if [ -f "$bin" ]; then mv "$bin" resources/; fi
-          done
+          for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
           
+          # 处理 Resources 文件夹或 zip
           if [ -d "Resources" ]; then
             mv Resources resources/
           elif [ -f "Resources.zip" ]; then
@@ -66,8 +61,6 @@ jobs:
 
       - name: Setup iOS Environment Variables
         run: |
-          # 获取真实的 iOS SDK 路径，并设置为全局环境变量
-          # Apple 的 clang 链接器会自动读取 SDKROOT，无需 config.toml
           echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
           echo "IPHONEOS_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV
 
@@ -75,8 +68,54 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: cargo build --release --target aarch64-apple-ios
 
-      - name: Upload compiled binary
+      - name: Package as iOS App (IPA) and Sign
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "Starting iOS App packaging and signing process..."
+          
+          # 1. 创建标准的 iOS Payload 结构
+          mkdir -p Payload/TrollStore.app
+          
+          # 2. 复制编译好的 Rust 核心二进制文件
+          # (假设你的 Info.plist 中 CFBundleExecutable 的值是 TrollStore)
+          cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
+          
+          # 3. 解压 UI 资源 (Info.plist, AppIcon 图标, entitlements) 到 .app 根目录
+          if [ -d "resources/Resources" ]; then
+            cp -R resources/Resources/* Payload/TrollStore.app/
+          elif [ -d "resources" ] && [ -f "resources/Info.plist" ]; then
+            # 兼容平铺结构
+            cp resources/Info.plist Payload/TrollStore.app/
+            cp resources/AppIcon*.png Payload/TrollStore.app/ 2>/dev/null || true
+            cp resources/entitlements.plist Payload/TrollStore.app/ 2>/dev/null || true
+          fi
+          
+          # 4. 将核心工具链物理放入 App Bundle (供主程序运行时调用)
+          mkdir -p Payload/TrollStore.app/Binaries
+          cp resources/ldid Payload/TrollStore.app/Binaries/
+          cp resources/RootHelper Payload/TrollStore.app/Binaries/
+          cp resources/TrollHelper Payload/TrollStore.app/Binaries/
+          cp resources/fastPathSign Payload/TrollStore.app/Binaries/
+          
+          # 5. 赋予所有二进制文件执行权限
+          chmod +x Payload/TrollStore.app/TrollStore
+          chmod +x Payload/TrollStore.app/Binaries/*
+          
+          # 6. 使用内置的 ldid 和 entitlements 对主程序进行伪签名 (核心步骤)
+          if [ -f "Payload/TrollStore.app/entitlements.plist" ]; then
+            echo "Signing main binary with entitlements..."
+            ./Payload/TrollStore.app/Binaries/ldid -SPayload/TrollStore.app/entitlements.plist Payload/TrollStore.app/TrollStore
+            echo "✅ Successfully signed the main binary!"
+          else
+            echo "⚠️ Warning: entitlements.plist not found. App might not launch correctly on iOS."
+          fi
+          
+          # 7. 压缩成标准的 .ipa 文件
+          zip -r TrollStore-Rust.ipa Payload
+          echo "✅ IPA package created: TrollStore-Rust.ipa"
+
+      - name: Upload Final IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: trollstore-rs-ios-binary
-          path: ${{ env.PROJECT_DIR }}/target/aarch64-apple-ios/release/trollstore-rs
+          name: TrollStore-Rust-IPA-Release
+          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust.ipa
