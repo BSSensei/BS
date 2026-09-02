@@ -85,20 +85,33 @@ jobs:
           # 1. 复制主程序二进制
           cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
           
-          # 2. 复制 UI 资源，但【严格排除】 entitlements.plist
+          # 2. 强制复制 Resources 目录下的所有文件到 .app 根目录
           if [ -d "resources/Resources" ]; then
-            rsync -av --exclude='entitlements.plist' resources/Resources/ Payload/TrollStore.app/
+            cd resources/Resources
+            cp -R * ../../Payload/TrollStore.app/ 2>/dev/null || true
+            cd ../..
           fi
           
-          # 3. 【关键】不复制 Binaries 目录 (ldid, RootHelper 等)
-          # 普通 iOS 设备在安装时会校验 Bundle 内所有文件的签名。
-          # 包含未签名的辅助工具会导致 Sideloadly 签名失败或设备拒绝安装。
+          # 兼容平铺结构
+          if [ -f "resources/Info.plist" ]; then
+            cp resources/Info.plist Payload/TrollStore.app/
+          fi
+          
+          # 3. 【关键】强制移除 entitlements.plist 和 Binaries 目录
+          rm -f Payload/TrollStore.app/entitlements.plist
+          rm -rf Payload/TrollStore.app/Binaries
+          
+          # 4. 验证 Info.plist 是否存在于浅层根目录
+          if [ ! -f "Payload/TrollStore.app/Info.plist" ]; then
+            echo "Fatal Error: Info.plist is missing in the .app bundle root!"
+            exit 1
+          fi
           
           chmod +x Payload/TrollStore.app/TrollStore
           
-          # 4. 打包
+          # 5. 打包
           zip -r TrollStore-Rust-Standard.ipa Payload
-          echo "✅ Clean IPA created. Ready for Sideloadly / AltStore."
+          echo "Clean IPA created with valid Info.plist. Ready for Sideloadly / AltStore."
 
       - name: Upload Clean IPA Artifact
         uses: actions/upload-artifact@v4
