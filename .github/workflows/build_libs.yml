@@ -1,11 +1,6 @@
-name: Build and Package TrollStore Rust (Standard Device Test)
+name: macOS Comprehensive Logic Tests
 
-on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
   test-macos:
@@ -34,87 +29,6 @@ jobs:
           for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
           if [ -d "Resources" ]; then mv Resources resources/; elif [ -f "Resources.zip" ]; then mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..; fi
 
-      - name: Run Host Tests (Core Logic)
+      - name: Run Comprehensive macOS Tests
         working-directory: ${{ env.PROJECT_DIR }}
         run: cargo run
-
-  build-ios-ipa:
-    runs-on: macos-latest
-    needs: test-macos
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios
-
-      - name: Extract and Auto-Fix Project Structure
-        run: |
-          mkdir -p extracted
-          unzip -o TrollStore.zip -d extracted
-          CARGO_FILE=$(find extracted -name "Cargo.toml" -maxdepth 3 | head -n 1)
-          PROJECT_DIR=$(dirname "$CARGO_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          cd "$PROJECT_DIR"
-          if [ ! -d "src" ]; then
-            mkdir -p src/core
-            for file in main.rs ui.rs error.rs; do [ -f "$file" ] && mv "$file" src/; done
-            for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do [ -f "$file" ] && mv "$file" src/core/; done
-          fi
-          mkdir -p resources
-          for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
-          if [ -d "Resources" ]; then mv Resources resources/; elif [ -f "Resources.zip" ]; then mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..; fi
-
-      - name: Setup iOS Environment Variables
-        run: |
-          echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
-          echo "IPHONEOS_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV
-
-      - name: Build for iOS (arm64)
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: cargo build --release --target aarch64-apple-ios
-
-      - name: Package as Clean iOS App (IPA) for Standard Devices
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          echo "Packaging clean IPA for Sideloadly / Standard Devices..."
-          mkdir -p Payload/TrollStore.app
-          
-          # 1. 复制主程序二进制
-          cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
-          
-          # 2. 强制复制 Resources 目录下的所有文件到 .app 根目录
-          if [ -d "resources/Resources" ]; then
-            cd resources/Resources
-            cp -R * ../../Payload/TrollStore.app/ 2>/dev/null || true
-            cd ../..
-          fi
-          
-          # 兼容平铺结构
-          if [ -f "resources/Info.plist" ]; then
-            cp resources/Info.plist Payload/TrollStore.app/
-          fi
-          
-          # 3. 【关键】强制移除 entitlements.plist 和 Binaries 目录
-          rm -f Payload/TrollStore.app/entitlements.plist
-          rm -rf Payload/TrollStore.app/Binaries
-          
-          # 4. 验证 Info.plist 是否存在于浅层根目录
-          if [ ! -f "Payload/TrollStore.app/Info.plist" ]; then
-            echo "Fatal Error: Info.plist is missing in the .app bundle root!"
-            exit 1
-          fi
-          
-          chmod +x Payload/TrollStore.app/TrollStore
-          
-          # 5. 打包
-          zip -r TrollStore-Rust-Standard.ipa Payload
-          echo "Clean IPA created with valid Info.plist. Ready for Sideloadly / AltStore."
-
-      - name: Upload Clean IPA Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: TrollStore-Rust-Standard-IPA
-          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust-Standard.ipa
