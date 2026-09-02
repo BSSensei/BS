@@ -37,7 +37,6 @@ jobs:
           
           cd "$PROJECT_DIR"
           
-          # 自动修复 Rust 源码结构
           if [ ! -d "src" ]; then
             echo "Auto-fixing: Moving .rs files into src/ directory..."
             mkdir -p src/core
@@ -45,11 +44,9 @@ jobs:
             for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do [ -f "$file" ] && mv "$file" src/core/; done
           fi
           
-          # 确保 resources 目录存在，供 rust-embed 打包进二进制
           mkdir -p resources
           for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
           
-          # 处理 Resources 文件夹或 zip
           if [ -d "Resources" ]; then
             mv Resources resources/
           elif [ -f "Resources.zip" ]; then
@@ -68,49 +65,40 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: cargo build --release --target aarch64-apple-ios
 
-      - name: Package as iOS App (IPA) and Sign
+      - name: Package as iOS App (IPA)
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "Starting iOS App packaging and signing process..."
+          echo "Starting iOS App packaging process..."
           
           # 1. 创建标准的 iOS Payload 结构
           mkdir -p Payload/TrollStore.app
           
           # 2. 复制编译好的 Rust 核心二进制文件
-          # (假设你的 Info.plist 中 CFBundleExecutable 的值是 TrollStore)
           cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
           
-          # 3. 解压 UI 资源 (Info.plist, AppIcon 图标, entitlements) 到 .app 根目录
+          # 3. 解压 UI 资源 (Info.plist, AppIcon, entitlements)
           if [ -d "resources/Resources" ]; then
             cp -R resources/Resources/* Payload/TrollStore.app/
           elif [ -d "resources" ] && [ -f "resources/Info.plist" ]; then
-            # 兼容平铺结构
             cp resources/Info.plist Payload/TrollStore.app/
             cp resources/AppIcon*.png Payload/TrollStore.app/ 2>/dev/null || true
             cp resources/entitlements.plist Payload/TrollStore.app/ 2>/dev/null || true
           fi
           
-          # 4. 将核心工具链物理放入 App Bundle (供主程序运行时调用)
+          # 4. 将核心工具链物理放入 App Bundle (供应用在真机上调用)
           mkdir -p Payload/TrollStore.app/Binaries
           cp resources/ldid Payload/TrollStore.app/Binaries/
           cp resources/RootHelper Payload/TrollStore.app/Binaries/
           cp resources/TrollHelper Payload/TrollStore.app/Binaries/
           cp resources/fastPathSign Payload/TrollStore.app/Binaries/
           
-          # 5. 赋予所有二进制文件执行权限
+          # 5. 赋予执行权限
           chmod +x Payload/TrollStore.app/TrollStore
           chmod +x Payload/TrollStore.app/Binaries/*
           
-          # 6. 使用内置的 ldid 和 entitlements 对主程序进行伪签名 (核心步骤)
-          if [ -f "Payload/TrollStore.app/entitlements.plist" ]; then
-            echo "Signing main binary with entitlements..."
-            ./Payload/TrollStore.app/Binaries/ldid -SPayload/TrollStore.app/entitlements.plist Payload/TrollStore.app/TrollStore
-            echo "✅ Successfully signed the main binary!"
-          else
-            echo "⚠️ Warning: entitlements.plist not found. App might not launch correctly on iOS."
-          fi
-          
-          # 7. 压缩成标准的 .ipa 文件
+          # 6. 压缩成标准的 .ipa 文件
+          # 注意：跳过在 macOS 上执行 ldid 签名，因为 iOS 二进制无法在 macOS 运行。
+          # 真机上的 TrollStore 安装此 IPA 时，会自动读取 entitlements.plist 并完成伪签名。
           zip -r TrollStore-Rust.ipa Payload
           echo "✅ IPA package created: TrollStore-Rust.ipa"
 
