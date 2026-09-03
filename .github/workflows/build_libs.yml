@@ -52,7 +52,6 @@ jobs:
       - name: Package Full IPA v3.0 with Tools and Localization
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          # 1. 生成汉化包 (修复 Python 警告，使用标准 open)
           python3 << 'PYTHON_SCRIPT'
           import os
           def write_strings(filepath, content_dict):
@@ -67,24 +66,25 @@ jobs:
           })
           PYTHON_SCRIPT
           
-          # 2. 创建 .app 容器并复制主程序
           mkdir -p Payload/TrollStore.app
           cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
           
-          # 3. 【核心修复】无死角复制所有 UI 资源 (排除源码和 entitlements)
-          # 这会确保所有的 AppIcon 和 Info.plist 被强制放入 .app 根目录
+          # 无死角复制 UI 资源，【严格排除】二进制工具链和源码，防止重复
           find resources -type f \
             ! -name "*.rs" \
             ! -name "Cargo.toml" \
             ! -name "Cargo.lock" \
             ! -name "entitlements.plist" \
+            ! -name "ldid" \
+            ! -name "RootHelper" \
+            ! -name "TrollHelper" \
+            ! -name "fastPathSign" \
+            ! -name "Resources.zip" \
             -exec cp {} Payload/TrollStore.app/ \;
             
-          # 4. 复制汉化包
           cp -R zh-Hans.lproj Payload/TrollStore.app/
           
-          # 5. 【关键】恢复核心工具链 (这是体积从 300KB 涨到 10MB+ 的原因)
-          # TrollStore 真机安装后，需要这些工具来执行伪签名和安装其他 IPA
+          # 将核心工具链唯一地放入 Binaries 子目录
           mkdir -p Payload/TrollStore.app/Binaries
           for bin in ldid RootHelper TrollHelper fastPathSign; do
             if [ -f "resources/$bin" ]; then
@@ -92,7 +92,6 @@ jobs:
             fi
           done
           
-          # 6. 强制修改版本号为 3.0 并确保名字为 TrollStore
           if [ -f "Payload/TrollStore.app/Info.plist" ]; then
             plutil -replace CFBundleShortVersionString -string "3.0" Payload/TrollStore.app/Info.plist
             plutil -replace CFBundleVersion -string "3.0" Payload/TrollStore.app/Info.plist
@@ -103,7 +102,6 @@ jobs:
             exit 1
           fi
           
-          # 7. 赋予执行权限并打包
           chmod +x Payload/TrollStore.app/TrollStore
           chmod +x Payload/TrollStore.app/Binaries/* 2>/dev/null || true
           zip -r TrollStore-Rust-v3.0-Full.ipa Payload
