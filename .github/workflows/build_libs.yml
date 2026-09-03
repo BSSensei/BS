@@ -48,16 +48,25 @@ jobs:
       - name: Generate Localization Package and Package IPA v3.0
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          python3 -c "
-import os, codecs
-def write_strings(filepath, content_dict):
-    with codecs.open(filepath, 'w', encoding='utf-16-le') as f:
-        f.write('\ufeff')
-        for k, v in content_dict.items():
-            f.write(f'\"{k}\" = \"{v}\";\n')
-os.makedirs('zh-Hans.lproj', exist_ok=True)
-write_strings('zh-Hans.lproj/Localizable.strings', {'Apps': '应用', 'Certs': '证书', 'Dylibs': '动态库', 'Files': '文件', 'Settings': '设置', 'Signed': '已签名', 'Unsigned': '未签名', 'Installing...': 'Installing...'})
-"
+          python3 << 'PYTHON_SCRIPT'
+          import os, codecs
+          def write_strings(filepath, content_dict):
+              with codecs.open(filepath, 'w', encoding='utf-16-le') as f:
+                  f.write('\ufeff')
+                  for k, v in content_dict.items():
+                      f.write(f'"{k}" = "{v}";\n')
+          os.makedirs('zh-Hans.lproj', exist_ok=True)
+          write_strings('zh-Hans.lproj/Localizable.strings', {
+              'Apps': '应用',
+              'Certs': '证书',
+              'Dylibs': '动态库',
+              'Files': '文件',
+              'Settings': '设置',
+              'Signed': '已签名',
+              'Unsigned': '未签名',
+              'Installing...': 'Installing...'
+          })
+          PYTHON_SCRIPT
           
           mkdir -p Payload/TrollStore.app
           cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
