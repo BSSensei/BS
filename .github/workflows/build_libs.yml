@@ -1,4 +1,4 @@
-name: Build and Package TrollStore Rust v3.0 (Localized)
+name: Build Full TrollStore Rust v3.0 (Localized)
 
 on:
   push:
@@ -49,10 +49,10 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: cargo build --release --target aarch64-apple-ios
 
-      - name: Generate Localization Package and Package IPA v3.0
+      - name: Package Full IPA v3.0 with Tools and Localization
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          # 修复 1: 使用 Python 3 标准 open() 和 utf-16 编码，自动处理 BOM
+          # 1. 生成汉化包 (修复 Python 警告，使用标准 open)
           python3 << 'PYTHON_SCRIPT'
           import os
           def write_strings(filepath, content_dict):
@@ -61,48 +61,55 @@ jobs:
                       f.write(f'"{k}" = "{v}";\n')
           os.makedirs('zh-Hans.lproj', exist_ok=True)
           write_strings('zh-Hans.lproj/Localizable.strings', {
-              'Apps': '应用',
-              'Certs': '证书',
-              'Dylibs': '动态库',
-              'Files': '文件',
-              'Settings': '设置',
-              'Signed': '已签名',
-              'Unsigned': '未签名',
-              'Installing...': 'Installing...'
+              'Apps': '应用', 'Certs': '证书', 'Dylibs': '动态库', 
+              'Files': '文件', 'Settings': '设置', 'Signed': '已签名', 
+              'Unsigned': '未签名', 'Installing...': 'Installing...'
           })
           PYTHON_SCRIPT
           
+          # 2. 创建 .app 容器并复制主程序
           mkdir -p Payload/TrollStore.app
           cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
           
-          # 修复 2: 兼容 resources/Resources/ 嵌套目录 和 resources/ 平铺目录
-          if [ -d "resources/Resources" ]; then
-            rsync -av --exclude='entitlements.plist' resources/Resources/ Payload/TrollStore.app/
-          fi
-          if [ -f "resources/Info.plist" ]; then
-            cp resources/Info.plist Payload/TrollStore.app/
-          fi
-          cp resources/AppIcon*.png Payload/TrollStore.app/ 2>/dev/null || true
-          
+          # 3. 【核心修复】无死角复制所有 UI 资源 (排除源码和 entitlements)
+          # 这会确保所有的 AppIcon 和 Info.plist 被强制放入 .app 根目录
+          find resources -type f \
+            ! -name "*.rs" \
+            ! -name "Cargo.toml" \
+            ! -name "Cargo.lock" \
+            ! -name "entitlements.plist" \
+            -exec cp {} Payload/TrollStore.app/ \;
+            
+          # 4. 复制汉化包
           cp -R zh-Hans.lproj Payload/TrollStore.app/
-          rm -rf Payload/TrollStore.app/Binaries
           
+          # 5. 【关键】恢复核心工具链 (这是体积从 300KB 涨到 10MB+ 的原因)
+          # TrollStore 真机安装后，需要这些工具来执行伪签名和安装其他 IPA
+          mkdir -p Payload/TrollStore.app/Binaries
+          for bin in ldid RootHelper TrollHelper fastPathSign; do
+            if [ -f "resources/$bin" ]; then
+              cp "resources/$bin" Payload/TrollStore.app/Binaries/
+            fi
+          done
+          
+          # 6. 强制修改版本号为 3.0 并确保名字为 TrollStore
           if [ -f "Payload/TrollStore.app/Info.plist" ]; then
             plutil -replace CFBundleShortVersionString -string "3.0" Payload/TrollStore.app/Info.plist
             plutil -replace CFBundleVersion -string "3.0" Payload/TrollStore.app/Info.plist
             plutil -replace CFBundleName -string "TrollStore" Payload/TrollStore.app/Info.plist
             plutil -replace CFBundleDisplayName -string "TrollStore" Payload/TrollStore.app/Info.plist
           else
-            echo "Fatal Error: Info.plist still not found. Debugging resources directory:"
-            ls -la resources/
+            echo "Fatal Error: Info.plist missing after exhaustive search."
             exit 1
           fi
           
+          # 7. 赋予执行权限并打包
           chmod +x Payload/TrollStore.app/TrollStore
-          zip -r TrollStore-Rust-v3.0-Localized.ipa Payload
+          chmod +x Payload/TrollStore.app/Binaries/* 2>/dev/null || true
+          zip -r TrollStore-Rust-v3.0-Full.ipa Payload
 
-      - name: Upload Localized IPA v3.0 Artifact
+      - name: Upload Full IPA v3.0 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TrollStore-Rust-v3.0-Localized-IPA
-          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust-v3.0-Localized.ipa
+          name: TrollStore-Rust-v3.0-Full-IPA
+          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust-v3.0-Full.ipa
