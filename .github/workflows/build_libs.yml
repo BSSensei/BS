@@ -1,9 +1,14 @@
-name: macOS Comprehensive Logic Tests
+name: Build and Package TrollStore Rust v3.0 (Localized)
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  test-macos:
+  build-ios-ipa:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
@@ -11,6 +16,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
 
       - name: Extract and Auto-Fix Project Structure
         run: |
@@ -29,6 +36,54 @@ jobs:
           for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
           if [ -d "Resources" ]; then mv Resources resources/; elif [ -f "Resources.zip" ]; then mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..; fi
 
-      - name: Run Comprehensive macOS Tests
+      - name: Setup iOS Environment Variables
+        run: |
+          echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
+          echo "IPHONEOS_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV
+
+      - name: Build for iOS (arm64)
         working-directory: ${{ env.PROJECT_DIR }}
-        run: cargo run
+        run: cargo build --release --target aarch64-apple-ios
+
+      - name: Generate Localization Package and Package IPA v3.0
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          python3 -c "
+import os, codecs
+def write_strings(filepath, content_dict):
+    with codecs.open(filepath, 'w', encoding='utf-16-le') as f:
+        f.write('\ufeff')
+        for k, v in content_dict.items():
+            f.write(f'\"{k}\" = \"{v}\";\n')
+os.makedirs('zh-Hans.lproj', exist_ok=True)
+write_strings('zh-Hans.lproj/Localizable.strings', {'Apps': '应用', 'Certs': '证书', 'Dylibs': '动态库', 'Files': '文件', 'Settings': '设置', 'Signed': '已签名', 'Unsigned': '未签名', 'Installing...': 'Installing...'})
+"
+          
+          mkdir -p Payload/TrollStore.app
+          cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
+          
+          if [ -d "resources/Resources" ]; then
+            rsync -av --exclude='entitlements.plist' resources/Resources/ Payload/TrollStore.app/
+          fi
+          
+          cp -R zh-Hans.lproj Payload/TrollStore.app/
+          rm -rf Payload/TrollStore.app/Binaries
+          
+          if [ -f "Payload/TrollStore.app/Info.plist" ]; then
+            plutil -replace CFBundleShortVersionString -string "3.0" Payload/TrollStore.app/Info.plist
+            plutil -replace CFBundleVersion -string "3.0" Payload/TrollStore.app/Info.plist
+            plutil -replace CFBundleName -string "TrollStore" Payload/TrollStore.app/Info.plist
+            plutil -replace CFBundleDisplayName -string "TrollStore" Payload/TrollStore.app/Info.plist
+          else
+            echo "Error: Info.plist not found. Cannot set version to 3.0."
+            exit 1
+          fi
+          
+          chmod +x Payload/TrollStore.app/TrollStore
+          zip -r TrollStore-Rust-v3.0-Localized.ipa Payload
+
+      - name: Upload Localized IPA v3.0 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrollStore-Rust-v3.0-Localized-IPA
+          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust-v3.0-Localized.ipa
