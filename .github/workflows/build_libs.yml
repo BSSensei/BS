@@ -34,7 +34,11 @@ jobs:
           fi
           mkdir -p resources
           for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
-          if [ -d "Resources" ]; then mv Resources resources/; elif [ -f "Resources.zip" ]; then mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..; fi
+          if [ -d "Resources" ]; then 
+            mv Resources resources/
+          elif [ -f "Resources.zip" ]; then 
+            mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..
+          fi
 
       - name: Setup iOS Environment Variables
         run: |
@@ -48,11 +52,11 @@ jobs:
       - name: Generate Localization Package and Package IPA v3.0
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          # 修复 1: 使用 Python 3 标准 open() 和 utf-16 编码，自动处理 BOM
           python3 << 'PYTHON_SCRIPT'
-          import os, codecs
+          import os
           def write_strings(filepath, content_dict):
-              with codecs.open(filepath, 'w', encoding='utf-16-le') as f:
-                  f.write('\ufeff')
+              with open(filepath, 'w', encoding='utf-16') as f:
                   for k, v in content_dict.items():
                       f.write(f'"{k}" = "{v}";\n')
           os.makedirs('zh-Hans.lproj', exist_ok=True)
@@ -71,9 +75,14 @@ jobs:
           mkdir -p Payload/TrollStore.app
           cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
           
+          # 修复 2: 兼容 resources/Resources/ 嵌套目录 和 resources/ 平铺目录
           if [ -d "resources/Resources" ]; then
             rsync -av --exclude='entitlements.plist' resources/Resources/ Payload/TrollStore.app/
           fi
+          if [ -f "resources/Info.plist" ]; then
+            cp resources/Info.plist Payload/TrollStore.app/
+          fi
+          cp resources/AppIcon*.png Payload/TrollStore.app/ 2>/dev/null || true
           
           cp -R zh-Hans.lproj Payload/TrollStore.app/
           rm -rf Payload/TrollStore.app/Binaries
@@ -84,7 +93,8 @@ jobs:
             plutil -replace CFBundleName -string "TrollStore" Payload/TrollStore.app/Info.plist
             plutil -replace CFBundleDisplayName -string "TrollStore" Payload/TrollStore.app/Info.plist
           else
-            echo "Error: Info.plist not found. Cannot set version to 3.0."
+            echo "Fatal Error: Info.plist still not found. Debugging resources directory:"
+            ls -la resources/
             exit 1
           fi
           
