@@ -1,113 +1,91 @@
-name: Build Full TrollStore Rust v3.0 (Localized)
+name: 构建 Terminal App
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build-ios-ipa:
+  build:
+    name: 编译与打包 IPA
     runs-on: macos-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: 检出代码仓库
+      uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios
+    - name: 安装必要依赖
+      run: |
+        echo "正在安装 XcodeGen 用于生成 Xcode 工程..."
+        brew install xcodegen
+        
+        echo "正在安装 ldid 用于伪签名注入权限..."
+        brew install ldid
 
-      - name: Extract and Auto-Fix Project Structure
-        run: |
-          mkdir -p extracted
-          unzip -o TrollStore.zip -d extracted
-          CARGO_FILE=$(find extracted -name "Cargo.toml" -maxdepth 3 | head -n 1)
-          PROJECT_DIR=$(dirname "$CARGO_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          cd "$PROJECT_DIR"
-          if [ ! -d "src" ]; then
-            mkdir -p src/core
-            for file in main.rs ui.rs error.rs; do [ -f "$file" ] && mv "$file" src/; done
-            for file in mod.rs ipa.rs cert.rs dylib.rs fs.rs plist.rs; do [ -f "$file" ] && mv "$file" src/core/; done
-          fi
-          mkdir -p resources
-          for bin in ldid RootHelper TrollHelper fastPathSign; do [ -f "$bin" ] && mv "$bin" resources/; done
-          if [ -d "Resources" ]; then 
-            mv Resources resources/
-          elif [ -f "Resources.zip" ]; then 
-            mv Resources.zip resources/ && cd resources && unzip -o Resources.zip && rm Resources.zip && cd ..
-          fi
+    - name: 准备编译环境并解压源码
+      run: |
+        mkdir -p TerminalApp
+        if [ -f Terminal.zip ]; then
+          echo "找到 Terminal.zip，正在解压源码文件..."
+          unzip -q Terminal.zip -d TerminalApp
+        else
+          echo "未找到 Terminal.zip，假设源码文件在仓库根目录，正在复制..."
+          cp *.swift Info.plist entitlements.plist RootHelper project.yml TerminalApp/ 2>/dev/null || true
+        fi
+        echo "环境准备完成。"
 
-      - name: Setup iOS Environment Variables
-        run: |
-          echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
-          echo "IPHONEOS_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV
+    - name: 生成 Xcode 工程文件
+      run: |
+        cd TerminalApp
+        echo "正在使用 XcodeGen 生成工程文件..."
+        xcodegen generate
 
-      - name: Build for iOS (arm64)
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: cargo build --release --target aarch64-apple-ios
+    - name: 编译 iOS App
+      run: |
+        cd TerminalApp
+        echo "开始编译 Terminal App..."
+        xcodebuild clean build \
+          -project Terminal.xcodeproj \
+          -scheme Terminal \
+          -sdk iphoneos \
+          -configuration Release \
+          -derivedDataPath build \
+          CODE_SIGNING_ALLOWED=NO
+        
+        if [ $? -ne 0 ]; then
+          echo "错误：编译失败，请检查上方的编译日志。"
+          exit 1
+        fi
+        echo "编译成功。"
 
-      - name: Package Full IPA v3.0 with Tools and Localization
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          python3 << 'PYTHON_SCRIPT'
-          import os
-          def write_strings(filepath, content_dict):
-              with open(filepath, 'w', encoding='utf-16') as f:
-                  for k, v in content_dict.items():
-                      f.write(f'"{k}" = "{v}";\n')
-          os.makedirs('zh-Hans.lproj', exist_ok=True)
-          write_strings('zh-Hans.lproj/Localizable.strings', {
-              'Apps': '应用', 'Certs': '证书', 'Dylibs': '动态库', 
-              'Files': '文件', 'Settings': '设置', 'Signed': '已签名', 
-              'Unsigned': '未签名', 'Installing...': 'Installing...'
-          })
-          PYTHON_SCRIPT
-          
-          mkdir -p Payload/TrollStore.app
-          cp target/aarch64-apple-ios/release/trollstore-rs Payload/TrollStore.app/TrollStore
-          
-          # 无死角复制 UI 资源，【严格排除】二进制工具链和源码，防止重复
-          find resources -type f \
-            ! -name "*.rs" \
-            ! -name "Cargo.toml" \
-            ! -name "Cargo.lock" \
-            ! -name "entitlements.plist" \
-            ! -name "ldid" \
-            ! -name "RootHelper" \
-            ! -name "TrollHelper" \
-            ! -name "fastPathSign" \
-            ! -name "Resources.zip" \
-            -exec cp {} Payload/TrollStore.app/ \;
-            
-          cp -R zh-Hans.lproj Payload/TrollStore.app/
-          
-          # 将核心工具链唯一地放入 Binaries 子目录
-          mkdir -p Payload/TrollStore.app/Binaries
-          for bin in ldid RootHelper TrollHelper fastPathSign; do
-            if [ -f "resources/$bin" ]; then
-              cp "resources/$bin" Payload/TrollStore.app/Binaries/
-            fi
-          done
-          
-          if [ -f "Payload/TrollStore.app/Info.plist" ]; then
-            plutil -replace CFBundleShortVersionString -string "3.0" Payload/TrollStore.app/Info.plist
-            plutil -replace CFBundleVersion -string "3.0" Payload/TrollStore.app/Info.plist
-            plutil -replace CFBundleName -string "TrollStore" Payload/TrollStore.app/Info.plist
-            plutil -replace CFBundleDisplayName -string "TrollStore" Payload/TrollStore.app/Info.plist
-          else
-            echo "Fatal Error: Info.plist missing after exhaustive search."
-            exit 1
-          fi
-          
-          chmod +x Payload/TrollStore.app/TrollStore
-          chmod +x Payload/TrollStore.app/Binaries/* 2>/dev/null || true
-          zip -r TrollStore-Rust-v3.0-Full.ipa Payload
+    - name: 注入权限伪签名并打包 IPA
+      run: |
+        cd TerminalApp
+        APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" | head -n 1)
+        
+        if [ -z "$APP_PATH" ]; then
+          echo "错误：未找到编译生成的 App 文件。"
+          exit 1
+        fi
+        
+        echo "找到 App 路径: $APP_PATH"
+        
+        mkdir -p Payload
+        cp -R "$APP_PATH" Payload/
+        
+        echo "正在为 RootHelper 赋予可执行权限..."
+        chmod +x "Payload/Terminal.app/RootHelper"
+        
+        echo "正在使用 ldid 注入巨魔权限..."
+        ldid -Sentitlements.plist "Payload/Terminal.app/Terminal"
+        ldid -Sentitlements.plist "Payload/Terminal.app/RootHelper"
+        
+        echo "正在打包为 IPA 文件..."
+        zip -q -r Terminal.ipa Payload
+        echo "打包完成。"
 
-      - name: Upload Full IPA v3.0 Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: TrollStore-Rust-v3.0-Full-IPA
-          path: ${{ env.PROJECT_DIR }}/TrollStore-Rust-v3.0-Full.ipa
+    - name: 上传 IPA 产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: Terminal-IPA-产物
+        path: TerminalApp/Terminal.ipa
