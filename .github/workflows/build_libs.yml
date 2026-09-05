@@ -1,4 +1,4 @@
-name: 构建 Terminal App
+name: Build Terminal App (No Xcode)
 
 on:
   push:
@@ -7,85 +7,70 @@ on:
 
 jobs:
   build:
-    name: 编译与打包 IPA
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
-    - name: 检出代码仓库
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: 安装必要依赖
+    - name: Install dependencies
       run: |
-        echo "正在安装 XcodeGen 用于生成 Xcode 工程..."
-        brew install xcodegen
-        
-        echo "正在安装 ldid 用于伪签名注入权限..."
         brew install ldid
 
-    - name: 准备编译环境并解压源码
+    - name: Prepare environment
       run: |
         mkdir -p TerminalApp
         if [ -f Terminal.zip ]; then
-          echo "找到 Terminal.zip，正在解压源码文件..."
           unzip -q Terminal.zip -d TerminalApp
         else
-          echo "未找到 Terminal.zip，假设源码文件在仓库根目录，正在复制..."
-          cp *.swift Info.plist entitlements.plist RootHelper project.yml TerminalApp/ 2>/dev/null || true
+          echo "Terminal.zip not found, assuming files are in root"
+          cp *.swift Info.plist entitlements.plist RootHelper TerminalApp/ 2>/dev/null || true
         fi
-        echo "环境准备完成。"
 
-    - name: 生成 Xcode 工程文件
+    - name: Compile Swift Source Code
+      working-directory: ./TerminalApp
       run: |
-        cd TerminalApp
-        echo "正在使用 XcodeGen 生成工程文件..."
-        xcodegen generate
-
-    - name: 编译 iOS App
-      run: |
-        cd TerminalApp
-        echo "开始编译 Terminal App..."
-        xcodebuild clean build \
-          -project Terminal.xcodeproj \
-          -scheme Terminal \
-          -sdk iphoneos \
-          -configuration Release \
-          -derivedDataPath build \
-          CODE_SIGNING_ALLOWED=NO
+        export SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+        export TARGET="arm64-apple-ios16.5"
         
-        if [ $? -ne 0 ]; then
-          echo "错误：编译失败，请检查上方的编译日志。"
-          exit 1
-        fi
-        echo "编译成功。"
-
-    - name: 注入权限伪签名并打包 IPA
-      run: |
-        cd TerminalApp
-        APP_PATH=$(find build/Build/Products/Release-iphoneos -name "*.app" | head -n 1)
+        # 收集所有 Swift 文件
+        SWIFT_FILES=$(find . -name "*.swift")
         
-        if [ -z "$APP_PATH" ]; then
-          echo "错误：未找到编译生成的 App 文件。"
-          exit 1
+        # 使用 swiftc 直接编译并链接为 iOS 可执行文件
+        swiftc -sdk $SDK_PATH -target $TARGET -parse-as-library -module-name Terminal \
+          -framework UIKit -framework Foundation \
+          $SWIFT_FILES -o Terminal
+
+    - name: Assemble App Bundle
+      working-directory: ./TerminalApp
+      run: |
+        mkdir -p Terminal.app
+        cp Terminal Terminal.app/
+        cp Info.plist Terminal.app/
+        cp RootHelper Terminal.app/
+        chmod +x Terminal.app/RootHelper
+        
+        if [ -f "1.png" ]; then
+            cp 1.png Terminal.app/AppIcon.png
         fi
         
-        echo "找到 App 路径: $APP_PATH"
-        
-        mkdir -p Payload
-        cp -R "$APP_PATH" Payload/
-        
-        echo "正在为 RootHelper 赋予可执行权限..."
-        chmod +x "Payload/Terminal.app/RootHelper"
-        
-        echo "正在使用 ldid 注入巨魔权限..."
-        ldid -Sentitlements.plist "Payload/Terminal.app/Terminal"
-        ldid -Sentitlements.plist "Payload/Terminal.app/RootHelper"
-        
-        echo "正在打包为 IPA 文件..."
-        zip -q -r Terminal.ipa Payload
-        echo "打包完成。"
+        # 转换 Info.plist 为二进制格式 (iOS 要求)
+        plutil -convert binary1 Terminal.app/Info.plist
 
-    - name: 上传 IPA 产物
+    - name: Sign and Package IPA
+      working-directory: ./TerminalApp
+      run: |
+        # 使用 ldid 注入巨魔所需的 entitlements
+        ldid -Sentitlements.plist Terminal.app/Terminal
+        ldid -Sentitlements.plist Terminal.app/RootHelper
+        
+        # 打包为 IPA
+        mkdir Payload
+        cp -R Terminal.app Payload/
+        zip -r Terminal.ipa Payload
+
+    - name: Upload IPA Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Terminal-IPA-产物
+        name: Terminal-IPA
         path: TerminalApp/Terminal.ipa
