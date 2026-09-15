@@ -1,76 +1,65 @@
-name: Build Terminal App (No Xcode)
+name: Build ldid
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main", "master", "dev" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  release:
+    types: [created]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-13
-
+    name: Build ldid (iOS arm64)
+    runs-on: macos-14
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        brew install ldid
+      - name: Extract ldid.zip
+        run: |
+          if [ -f "ldid.zip" ]; then
+            echo "Extracting ldid.zip..."
+            unzip -q ldid.zip
+            if [ -d "ldid" ] && [ -f "ldid/Makefile" ]; then
+              mv ldid/* . 2>/dev/null || true
+              rm -rf ldid
+            fi
+            rm -f ldid.zip
+          fi
+          ls -la
 
-    - name: Prepare environment
-      run: |
-        mkdir -p TerminalApp
-        if [ -f Terminal.zip ]; then
-          unzip -q Terminal.zip -d TerminalApp
-        else
-          echo "Terminal.zip not found, assuming files are in root"
-          cp *.swift Info.plist entitlements.plist RootHelper TerminalApp/ 2>/dev/null || true
-        fi
+      - name: Fix libplist directory name
+        run: |
+          if [ -d "libpist_lib" ] && [ ! -d "libplist_lib" ]; then
+            echo "Renaming libpist_lib to libplist_lib..."
+            mv libpist_lib libplist_lib
+          fi
 
-    - name: Compile Swift Source Code
-      working-directory: ./TerminalApp
-      run: |
-        export SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-        export TARGET="arm64-apple-ios16.5"
-        
-        # 收集所有 Swift 文件
-        SWIFT_FILES=$(find . -name "*.swift")
-        
-        # 使用 swiftc 直接编译并链接为 iOS 可执行文件
-        swiftc -sdk $SDK_PATH -target $TARGET -parse-as-library -module-name Terminal \
-          -framework UIKit -framework Foundation \
-          $SWIFT_FILES -o Terminal
+      - name: Patch Makefile directly
+        run: |
+          echo "Patching Makefile to include codesign.swift and static libraries..."
+          sed -i '' 's|ldid: ldid.swift codesign.o|ldid: ldid.swift codesign.swift codesign.o|' Makefile
+          sed -i '' 's|ldid.swift codesign.o -o ldid|ldid.swift codesign.swift codesign.o -o ldid|' Makefile
+          sed -i '' 's|-L. -L./libs|-L./openssl_lib -L./libplist_lib|' Makefile
+          
+          echo "Patched Makefile content:"
+          cat Makefile
 
-    - name: Assemble App Bundle
-      working-directory: ./TerminalApp
-      run: |
-        mkdir -p Terminal.app
-        cp Terminal Terminal.app/
-        cp Info.plist Terminal.app/
-        cp RootHelper Terminal.app/
-        chmod +x Terminal.app/RootHelper
-        
-        if [ -f "1.png" ]; then
-            cp 1.png Terminal.app/AppIcon.png
-        fi
-        
-        # 转换 Info.plist 为二进制格式 (iOS 要求)
-        plutil -convert binary1 Terminal.app/Info.plist
+      - name: Download iOS SDK
+        run: make deps
 
-    - name: Sign and Package IPA
-      working-directory: ./TerminalApp
-      run: |
-        # 使用 ldid 注入巨魔所需的 entitlements
-        ldid -Sentitlements.plist Terminal.app/Terminal
-        ldid -Sentitlements.plist Terminal.app/RootHelper
-        
-        # 打包为 IPA
-        mkdir Payload
-        cp -R Terminal.app Payload/
-        zip -r Terminal.ipa Payload
+      - name: Build ldid
+        run: make ldid
 
-    - name: Upload IPA Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Terminal-IPA
-        path: TerminalApp/Terminal.ipa
+      - name: Verify binary architecture
+        run: |
+          file ldid
+          lipo -info ldid || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldid-ios-arm64
+          path: ldid
