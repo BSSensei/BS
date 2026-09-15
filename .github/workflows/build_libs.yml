@@ -1,1 +1,90 @@
+name: Build ldid
 
+on:
+  push:
+    branches: [ "main", "master", "dev" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ldid (iOS arm64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract ldid.zip
+        run: |
+          if [ -f "ldid.zip" ]; then
+            unzip -q ldid.zip
+            if [ -d "ldid" ] && [ -f "ldid/Makefile" ]; then
+              mv ldid/* . 2>/dev/null || true
+              rm -rf ldid
+            fi
+            rm -f ldid.zip
+          fi
+          ls -la
+
+      - name: Fix libplist directory name
+        run: |
+          if [ -d "libpist_lib" ] && [ ! -d "libplist_lib" ]; then
+            mv libpist_lib libplist_lib
+          fi
+
+      - name: Generate Makefile
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          makefile = r'''SDK ?= ./sdks/iPhoneOS16.5.sdk
+          TARGET = arm64-apple-ios16.5
+          SWIFT_OPT = -O -whole-module-optimization
+          CLANG_OPT = -O3
+          PWD := $(shell pwd)
+
+          all: ldid
+
+          ldid-Bridging-Header.h:
+          \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
+
+          deps:
+          \t@if [ ! -d "$(SDK)" ]; then \
+          \t\techo "=== Downloading iPhoneOS16.5 SDK ==="; \
+          \t\tmkdir -p sdks && \
+          \t\tcurl -sL https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz | tar -xJ -C sdks; \
+          \tfi
+
+          codesign.o: codesign.m ldidbridge.h deps
+          \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
+
+          ldid: ldid.swift codesign.swift codesign.o ldid-Bridging-Header.h deps
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h ldid.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
+
+          clean:
+          \t@rm -f ldid codesign.o ldid-Bridging-Header.h
+
+          .PHONY: all clean deps
+          '''
+          Path("Makefile").write_text(makefile.replace("\\t", "\t"))
+          PY
+
+      - name: Download iOS SDK
+        run: make deps
+
+      - name: Build ldid
+        run: make ldid
+
+      - name: Verify binary architecture
+        run: |
+          file ldid
+          lipo -info ldid || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldid-ios-arm64
+          path: ldid
