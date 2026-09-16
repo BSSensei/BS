@@ -133,6 +133,8 @@ jobs:
           CLANG_OPT = -O3
           PWD := $(shell pwd)
 
+          XCC_INCLUDES = -Xcc -I./openssl_include -Xcc -I./libplist_include
+
           all: ldid
 
           deps:
@@ -145,16 +147,12 @@ jobs:
           codesign.o: codesign.m ldidbridge.h deps
           \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
 
-          codesign_swift.o: codesign.swift deps
+          ldid: main.swift codesign.swift codesign.o deps
           \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -parse-as-library -import-objc-header ldid-Bridging-Header.h -c codesign.swift -o codesign_swift.o
-
-          ldid: main.swift codesign_swift.o codesign.o deps
-          \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -import-objc-header ldid-Bridging-Header.h main.swift codesign_swift.o codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid $(XCC_INCLUDES) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security -Xlinker -u -Xlinker _ldid_cs_main
 
           clean:
-          \t@rm -f ldid codesign.o codesign_swift.o ldid-Bridging-Header.h
+          \t@rm -f ldid codesign.o ldid-Bridging-Header.h
 
           .PHONY: all clean deps
           '''
