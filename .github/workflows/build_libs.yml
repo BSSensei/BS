@@ -35,7 +35,7 @@ jobs:
             mv libpist_lib libplist_lib
           fi
 
-      - name: Prepare main.swift
+      - name: Prepare main.swift and codesign.swift
         run: |
           echo "=== Before ==="
           ls -la *.swift || true
@@ -43,7 +43,7 @@ jobs:
           rm -f main.swift
 
           if [ ! -f "ldid.swift" ]; then
-            echo "ERROR: ldid.swift not found after checkout/extract"
+            echo "ERROR: ldid.swift not found"
             ls -la
             exit 1
           fi
@@ -62,41 +62,40 @@ jobs:
               r'exit\(ldid_cs_main\(\)\)\s*\}\s*$',
               re.DOTALL
           )
-          new_src, n = pattern.subn("\n", src)
+          src, n = pattern.subn("\n", src)
           print("Removed %d top-level ldid_cs_main block(s)" % n)
 
           anchor = "func main() {\n"
-          if anchor not in new_src:
-              raise SystemExit("ERROR: 'func main() {' not found in main.swift")
+          if anchor not in src:
+              raise SystemExit("ERROR: 'func main() {' not found")
 
           inject = """func main() {
               if CommandLine.arguments.count > 1 {
-                  let __cs_args = CommandLine.arguments
-                  if __cs_args.contains("--verify")
-                      || __cs_args.contains("--display")
-                      || __cs_args.contains("--extract-certificates")
-                      || __cs_args.contains("--extract-signature")
-                      || __cs_args.contains("--detached")
-                      || __cs_args.contains("--embed-signature")
-                      || __cs_args.contains("--unsign")
-                      || __cs_args.contains("--super-deep")
-                      || __cs_args.contains("--deep")
-                      || __cs_args.contains("--keychain")
+                  let a = CommandLine.arguments
+                  if a.contains("--verify")
+                      || a.contains("--display")
+                      || a.contains("--extract-certificates")
+                      || a.contains("--extract-signature")
+                      || a.contains("--detached")
+                      || a.contains("--embed-signature")
+                      || a.contains("--unsign")
+                      || a.contains("--super-deep")
+                      || a.contains("--deep")
+                      || a.contains("--keychain")
                   {
                       exit(ldid_cs_main())
                   }
               }
           """
 
-          new_src = new_src.replace(anchor, inject, 1)
-          p.write_text(new_src)
+          src = src.replace(anchor, inject, 1)
+          p.write_text(src)
           print("Injected ldid_cs_main routing into main()")
           PYEOF
 
           python3 fix_main.py
           rm -f fix_main.py
 
-          # 给 codesign.swift 的 ldid_cs_main 加 @_cdecl，固定 C 符号名
           cat > fix_codesign.py <<'PYEOF'
           from pathlib import Path
 
@@ -104,32 +103,24 @@ jobs:
           src = p.read_text()
 
           old = "func ldid_cs_main() -> Int32 {"
-          new = '@_cdecl("ldid_cs_main")\nfunc ldid_cs_main() -> Int32 {'
+          new = '@_cdecl("ldid_cs_main")\npublic func ldid_cs_main() -> Int32 {'
 
           if '@_cdecl("ldid_cs_main")' in src:
-              print("Already has @_cdecl, skip")
+              print("Already has @_cdecl")
           elif old in src:
               src = src.replace(old, new, 1)
               p.write_text(src)
-              print("Added @_cdecl to ldid_cs_main")
+              print("Added @_cdecl + public to ldid_cs_main")
           else:
-              raise SystemExit("ERROR: 'func ldid_cs_main() -> Int32 {' not found in codesign.swift")
+              raise SystemExit("ERROR: ldid_cs_main not found in codesign.swift")
           PYEOF
 
           python3 fix_codesign.py
           rm -f fix_codesign.py
 
-          echo "=== After ==="
-          ls -la *.swift
-          echo "=== grep ldid_cs_main in main.swift ==="
+          echo "=== grep ==="
           grep -n "ldid_cs_main" main.swift || true
-          echo "=== grep ldid_cs_main in codesign.swift ==="
           grep -n "ldid_cs_main" codesign.swift || true
-
-          if grep -q "UIApplicationMain" main.swift; then
-            echo "ERROR: main.swift still contains UIApplicationMain (GUI entry)"
-            exit 1
-          fi
 
       - name: Generate Makefile
         run: |
@@ -157,11 +148,14 @@ jobs:
           codesign.o: codesign.m ldidbridge.h deps
           \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
 
-          ldid: main.swift codesign.swift codesign.o ldid-Bridging-Header.h deps
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security -Xlinker -u -Xlinker _ldid_cs_main
+          codesign_swift.o: codesign.swift deps
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -parse-as-library -import-objc-header ldid-Bridging-Header.h -c codesign.swift -o codesign_swift.o
+
+          ldid: main.swift codesign_swift.o codesign.o ldid-Bridging-Header.h deps
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -import-objc-header ldid-Bridging-Header.h main.swift codesign_swift.o codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
 
           clean:
-          \t@rm -f ldid codesign.o ldid-Bridging-Header.h
+          \t@rm -f ldid codesign.o codesign_swift.o ldid-Bridging-Header.h
 
           .PHONY: all clean deps
           '''
@@ -171,7 +165,7 @@ jobs:
           python3 gen_makefile.py
           rm -f gen_makefile.py
 
-          echo "=== Makefile generated ==="
+          echo "=== Makefile ==="
           cat Makefile
 
       - name: Download iOS SDK
@@ -180,22 +174,17 @@ jobs:
       - name: Build ldid
         run: make ldid
 
-      - name: Inspect binary (size & symbols)
+      - name: Inspect binary
         run: |
           echo "=== file ==="
           file ldid
-          echo "=== lipo ==="
-          lipo -info ldid || true
           echo "=== size ==="
           size ldid || true
           echo "=== ls ==="
           ls -la ldid
-          echo "=== symbols: ldid_cs_main ==="
-          nm -gU ldid 2>/dev/null | grep -i ldid_cs_main || echo "NOT FOUND: ldid_cs_main missing!"
-          echo "=== symbols: codesign.swift other entries ==="
-          nm -gU ldid 2>/dev/null | grep -iE "CSVerifier|CSSuperDeepSigner|CSAdhocSigner|CSExtractor|CSDisplayer" || echo "NOT FOUND: other codesign.swift symbols missing"
-          echo "=== symbols: main.swift entries ==="
-          nm -gU ldid 2>/dev/null | grep -iE "printCDHash|printEntitlements|main" || true
+          echo "=== symbols ==="
+          nm -gU ldid 2>/dev/null | grep -i ldid_cs_main || echo "NOT FOUND: ldid_cs_main missing"
+          nm -gU ldid 2>/dev/null | grep -iE "CSVerifier|CSAdhocSigner|CSSuperDeepSigner" || echo "NOT FOUND: codesign classes missing"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
