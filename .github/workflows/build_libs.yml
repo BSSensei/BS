@@ -57,44 +57,43 @@ jobs:
           p = Path("main.swift")
           src = p.read_text()
 
+          # 1) 删除文件末尾的顶层 if ... exit(ldid_cs_main())
           pattern = re.compile(
               r'\nif\s+CommandLine\.arguments\.count\s*>\s*1\s*&&\s*\(.*?\)\s*\{\s*'
               r'exit\(ldid_cs_main\(\)\)\s*\}\s*$',
               re.DOTALL
           )
           new_src, n = pattern.subn("\n", src)
-          if n == 0:
-              print("WARN: top-level ldid_cs_main block not found, skip removal")
-          else:
-              print("Removed %d top-level ldid_cs_main block(s)" % n)
+          print("Removed %d top-level ldid_cs_main block(s)" % n)
 
           anchor = "func main() {\n"
           if anchor not in new_src:
               raise SystemExit("ERROR: 'func main() {' not found in main.swift")
 
+          # 2) 在 main() 里用函数指针强制引用 ldid_cs_main
           inject = """func main() {
-              let __cs_args = CommandLine.arguments
-              if __cs_args.contains("--verify")
-                  || __cs_args.contains("--display")
-                  || __cs_args.contains("--display-certificates")
-                  || __cs_args.contains("--display-resource-rules")
-                  || __cs_args.contains("--display-requirements")
-                  || __cs_args.contains("--extract-certificates")
-                  || __cs_args.contains("--extract-signature")
-                  || __cs_args.contains("--detached")
-                  || __cs_args.contains("--embed-signature")
-                  || __cs_args.contains("--unsign")
-                  || __cs_args.contains("--super-deep")
-                  || __cs_args.contains("--deep")
-                  || __cs_args.contains("--keychain")
-              {
-                  exit(ldid_cs_main())
+              let __cs_main_ptr: () -> Int32 = ldid_cs_main
+              if CommandLine.arguments.count > 1 {
+                  let __cs_args = CommandLine.arguments
+                  if __cs_args.contains("--verify")
+                      || __cs_args.contains("--display")
+                      || __cs_args.contains("--extract-certificates")
+                      || __cs_args.contains("--extract-signature")
+                      || __cs_args.contains("--detached")
+                      || __cs_args.contains("--embed-signature")
+                      || __cs_args.contains("--unsign")
+                      || __cs_args.contains("--super-deep")
+                      || __cs_args.contains("--deep")
+                      || __cs_args.contains("--keychain")
+                  {
+                      exit(__cs_main_ptr())
+                  }
               }
           """
 
           new_src = new_src.replace(anchor, inject, 1)
           p.write_text(new_src)
-          print("Injected ldid_cs_main routing into main()")
+          print("Injected ldid_cs_main routing (function pointer) into main()")
           PYEOF
 
           python3 fix_main.py
@@ -102,8 +101,8 @@ jobs:
 
           echo "=== After ==="
           ls -la *.swift
-          echo "=== main.swift head ==="
-          head -20 main.swift
+          echo "=== grep ldid_cs_main ==="
+          grep -n "ldid_cs_main" main.swift || true
           echo "=== main.swift tail ==="
           tail -20 main.swift
 
