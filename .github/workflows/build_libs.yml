@@ -40,7 +40,6 @@ jobs:
           echo "=== Before ==="
           ls -la *.swift || true
 
-          # 删除仓库里可能存在的 GUI 入口 main.swift
           rm -f main.swift
 
           if [ ! -f "ldid.swift" ]; then
@@ -51,15 +50,13 @@ jobs:
 
           mv ldid.swift main.swift
 
-          # 1) 去掉末尾顶层那段会被优化掉的 ldid_cs_main 判断
-          python3 - <<'PY'
+          cat > fix_main.py <<'PYEOF'
           from pathlib import Path
           import re
 
           p = Path("main.swift")
           src = p.read_text()
 
-          # 删除文件末尾的顶层 if ... exit(ldid_cs_main())
           pattern = re.compile(
               r'\nif\s+CommandLine\.arguments\.count\s*>\s*1\s*&&\s*\(.*?\)\s*\{\s*'
               r'exit\(ldid_cs_main\(\)\)\s*\}\s*$',
@@ -69,45 +66,39 @@ jobs:
           if n == 0:
               print("WARN: top-level ldid_cs_main block not found, skip removal")
           else:
-              print(f"Removed {n} top-level ldid_cs_main block(s)")
-          p.write_text(new_src)
-          PY
-
-          # 2) 在 main() 函数开头插入 CLI 路由，让 ldid_cs_main 成为可达代码
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("main.swift")
-          src = p.read_text()
+              print("Removed %d top-level ldid_cs_main block(s)" % n)
 
           anchor = "func main() {\n"
-          if anchor not in src:
+          if anchor not in new_src:
               raise SystemExit("ERROR: 'func main() {' not found in main.swift")
 
           inject = """func main() {
-    let __cs_args = CommandLine.arguments
-    if __cs_args.contains("--verify")
-        || __cs_args.contains("--display")
-        || __cs_args.contains("--display-certificates")
-        || __cs_args.contains("--display-resource-rules")
-        || __cs_args.contains("--display-requirements")
-        || __cs_args.contains("--extract-certificates")
-        || __cs_args.contains("--extract-signature")
-        || __cs_args.contains("--detached")
-        || __cs_args.contains("--embed-signature")
-        || __cs_args.contains("--unsign")
-        || __cs_args.contains("--super-deep")
-        || __cs_args.contains("--deep")
-        || __cs_args.contains("--keychain")
-    {
-        exit(ldid_cs_main())
-    }
-"""
+              let __cs_args = CommandLine.arguments
+              if __cs_args.contains("--verify")
+                  || __cs_args.contains("--display")
+                  || __cs_args.contains("--display-certificates")
+                  || __cs_args.contains("--display-resource-rules")
+                  || __cs_args.contains("--display-requirements")
+                  || __cs_args.contains("--extract-certificates")
+                  || __cs_args.contains("--extract-signature")
+                  || __cs_args.contains("--detached")
+                  || __cs_args.contains("--embed-signature")
+                  || __cs_args.contains("--unsign")
+                  || __cs_args.contains("--super-deep")
+                  || __cs_args.contains("--deep")
+                  || __cs_args.contains("--keychain")
+              {
+                  exit(ldid_cs_main())
+              }
+          """
 
-          src = src.replace(anchor, inject, 1)
-          p.write_text(src)
+          new_src = new_src.replace(anchor, inject, 1)
+          p.write_text(new_src)
           print("Injected ldid_cs_main routing into main()")
-          PY
+          PYEOF
+
+          python3 fix_main.py
+          rm -f fix_main.py
 
           echo "=== After ==="
           ls -la *.swift
