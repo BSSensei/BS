@@ -57,7 +57,6 @@ jobs:
           p = Path("main.swift")
           src = p.read_text()
 
-          # 1) 删除文件末尾的顶层 if ... exit(ldid_cs_main())
           pattern = re.compile(
               r'\nif\s+CommandLine\.arguments\.count\s*>\s*1\s*&&\s*\(.*?\)\s*\{\s*'
               r'exit\(ldid_cs_main\(\)\)\s*\}\s*$',
@@ -70,7 +69,6 @@ jobs:
           if anchor not in new_src:
               raise SystemExit("ERROR: 'func main() {' not found in main.swift")
 
-          # 2) 在 main() 里用函数指针强制引用 ldid_cs_main
           inject = """func main() {
               let __cs_main_ptr: () -> Int32 = ldid_cs_main
               if CommandLine.arguments.count > 1 {
@@ -118,7 +116,7 @@ jobs:
 
           makefile = r'''SDK ?= ./sdks/iPhoneOS16.5.sdk
           TARGET = arm64-apple-ios16.5
-          SWIFT_OPT = -O -whole-module-optimization
+          SWIFT_OPT = -O
           CLANG_OPT = -O3
           PWD := $(shell pwd)
 
