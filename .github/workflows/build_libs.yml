@@ -51,12 +51,71 @@ jobs:
 
           mv ldid.swift main.swift
 
+          # 1) 去掉末尾顶层那段会被优化掉的 ldid_cs_main 判断
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("main.swift")
+          src = p.read_text()
+
+          # 删除文件末尾的顶层 if ... exit(ldid_cs_main())
+          pattern = re.compile(
+              r'\nif\s+CommandLine\.arguments\.count\s*>\s*1\s*&&\s*\(.*?\)\s*\{\s*'
+              r'exit\(ldid_cs_main\(\)\)\s*\}\s*$',
+              re.DOTALL
+          )
+          new_src, n = pattern.subn("\n", src)
+          if n == 0:
+              print("WARN: top-level ldid_cs_main block not found, skip removal")
+          else:
+              print(f"Removed {n} top-level ldid_cs_main block(s)")
+          p.write_text(new_src)
+          PY
+
+          # 2) 在 main() 函数开头插入 CLI 路由，让 ldid_cs_main 成为可达代码
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("main.swift")
+          src = p.read_text()
+
+          anchor = "func main() {\n"
+          if anchor not in src:
+              raise SystemExit("ERROR: 'func main() {' not found in main.swift")
+
+          inject = """func main() {
+    let __cs_args = CommandLine.arguments
+    if __cs_args.contains("--verify")
+        || __cs_args.contains("--display")
+        || __cs_args.contains("--display-certificates")
+        || __cs_args.contains("--display-resource-rules")
+        || __cs_args.contains("--display-requirements")
+        || __cs_args.contains("--extract-certificates")
+        || __cs_args.contains("--extract-signature")
+        || __cs_args.contains("--detached")
+        || __cs_args.contains("--embed-signature")
+        || __cs_args.contains("--unsign")
+        || __cs_args.contains("--super-deep")
+        || __cs_args.contains("--deep")
+        || __cs_args.contains("--keychain")
+    {
+        exit(ldid_cs_main())
+    }
+"""
+
+          src = src.replace(anchor, inject, 1)
+          p.write_text(src)
+          print("Injected ldid_cs_main routing into main()")
+          PY
+
           echo "=== After ==="
           ls -la *.swift
           echo "=== main.swift head ==="
           head -20 main.swift
+          echo "=== main.swift tail ==="
+          tail -20 main.swift
 
-          # 确保不是 GUI 入口
           if grep -q "UIApplicationMain" main.swift; then
             echo "ERROR: main.swift still contains UIApplicationMain (GUI entry)"
             exit 1
@@ -89,7 +148,7 @@ jobs:
           \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
 
           ldid: main.swift codesign.swift codesign.o ldid-Bridging-Header.h deps
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security -Xlinker -u -Xlinker _ldid_cs_main
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
 
           clean:
           \t@rm -f ldid codesign.o ldid-Bridging-Header.h
