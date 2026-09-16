@@ -70,7 +70,6 @@ jobs:
               raise SystemExit("ERROR: 'func main() {' not found in main.swift")
 
           inject = """func main() {
-              let __cs_main_ptr: () -> Int32 = ldid_cs_main
               if CommandLine.arguments.count > 1 {
                   let __cs_args = CommandLine.arguments
                   if __cs_args.contains("--verify")
@@ -84,72 +83,60 @@ jobs:
                       || __cs_args.contains("--deep")
                       || __cs_args.contains("--keychain")
                   {
-                      exit(__cs_main_ptr())
+                      exit(ldid_cs_main())
                   }
               }
           """
 
           new_src = new_src.replace(anchor, inject, 1)
           p.write_text(new_src)
-          print("Injected ldid_cs_main routing (function pointer) into main()")
+          print("Injected ldid_cs_main routing into main()")
           PYEOF
 
           python3 fix_main.py
           rm -f fix_main.py
 
+          # 给 codesign.swift 的 ldid_cs_main 加 @_cdecl，固定 C 符号名
+          cat > fix_codesign.py <<'PYEOF'
+          from pathlib import Path
+
+          p = Path("codesign.swift")
+          src = p.read_text()
+
+          old = "func ldid_cs_main() -> Int32 {"
+          new = '@_cdecl("ldid_cs_main")\nfunc ldid_cs_main() -> Int32 {'
+
+          if '@_cdecl("ldid_cs_main")' in src:
+              print("Already has @_cdecl, skip")
+          elif old in src:
+              src = src.replace(old, new, 1)
+              p.write_text(src)
+              print("Added @_cdecl to ldid_cs_main")
+          else:
+              raise SystemExit("ERROR: 'func ldid_cs_main() -> Int32 {' not found in codesign.swift")
+          PYEOF
+
+          python3 fix_codesign.py
+          rm -f fix_codesign.py
+
           echo "=== After ==="
           ls -la *.swift
-          echo "=== grep ldid_cs_main ==="
+          echo "=== grep ldid_cs_main in main.swift ==="
           grep -n "ldid_cs_main" main.swift || true
-          echo "=== main.swift tail ==="
-          tail -20 main.swift
+          echo "=== grep ldid_cs_main in codesign.swift ==="
+          grep -n "ldid_cs_main" codesign.swift || true
 
           if grep -q "UIApplicationMain" main.swift; then
             echo "ERROR: main.swift still contains UIApplicationMain (GUI entry)"
             exit 1
           fi
 
-      - name: Diagnose codesign.swift
-        run: |
-          echo "=== 1) files present? ==="
-          ls -la main.swift codesign.swift codesign.m 2>&1 || true
-
-          echo "=== 2) ldid_cs_main defined in codesign.swift? ==="
-          grep -n "func ldid_cs_main" codesign.swift || echo "NO DEFINITION"
-
-          echo "=== 3) ldid_cs_main referenced in main.swift? ==="
-          grep -n "ldid_cs_main" main.swift || echo "NO REFERENCE"
-
-          echo "=== 4) swiftc version ==="
-          swiftc --version
-
-          echo "=== 5) compile codesign.swift alone ==="
-          xcrun --sdk iphoneos swiftc -target arm64-apple-ios16.5 \
-            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
-            -O -parse-as-library \
-            -c codesign.swift -o /tmp/codesign_only.o 2>&1 | tail -30 || true
-          ls -la /tmp/codesign_only.o 2>&1 || true
-          echo "--- symbols in codesign_only.o ---"
-          nm /tmp/codesign_only.o 2>/dev/null | grep -i ldid_cs_main || echo "NOT IN OBJECT"
-
-          echo "=== 6) compile both files ==="
-          xcrun --sdk iphoneos swiftc -target arm64-apple-ios16.5 \
-            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
-            -O -parse-as-library \
-            -c main.swift codesign.swift -o /tmp/pair.o 2>&1 | tail -30 || true
-          ls -la /tmp/pair.o 2>&1 || true
-          echo "--- symbols in pair.o ---"
-          nm /tmp/pair.o 2>/dev/null | grep -i ldid_cs_main || echo "NOT IN PAIR OBJECT"
-
-          echo "=== 7) is codesign.swift actually being passed by Makefile? ==="
-          grep -n "codesign.swift" Makefile || echo "NOT IN MAKEFILE"
-
       - name: Generate Makefile
         run: |
-          python3 - <<'PY'
+          cat > gen_makefile.py <<'PYEOF'
           from pathlib import Path
 
-          makefile = r'''SDK ?= ./sdks/iPhoneOS16.5.sdk
+          makefile = '''SDK ?= ./sdks/iPhoneOS16.5.sdk
           TARGET = arm64-apple-ios16.5
           SWIFT_OPT = -O
           CLANG_OPT = -O3
@@ -161,17 +148,17 @@ jobs:
           \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
 
           deps:
-          \t@if [ ! -d "$(SDK)" ]; then \
-          \t\techo "=== Downloading iPhoneOS16.5 SDK ==="; \
-          \t\tmkdir -p sdks && \
-          \t\tcurl -sL https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz | tar -xJ -C sdks; \
+          \t@if [ ! -d "$(SDK)" ]; then \\
+          \t\techo "=== Downloading iPhoneOS16.5 SDK ==="; \\
+          \t\tmkdir -p sdks && \\
+          \t\tcurl -sL https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz | tar -xJ -C sdks; \\
           \tfi
 
           codesign.o: codesign.m ldidbridge.h deps
           \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
 
           ldid: main.swift codesign.swift codesign.o ldid-Bridging-Header.h deps
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security -Xlinker -u -Xlinker _ldid_cs_main
 
           clean:
           \t@rm -f ldid codesign.o ldid-Bridging-Header.h
@@ -179,7 +166,13 @@ jobs:
           .PHONY: all clean deps
           '''
           Path("Makefile").write_text(makefile.replace("\\t", "\t"))
-          PY
+          PYEOF
+
+          python3 gen_makefile.py
+          rm -f gen_makefile.py
+
+          echo "=== Makefile generated ==="
+          cat Makefile
 
       - name: Download iOS SDK
         run: make deps
@@ -197,8 +190,10 @@ jobs:
           size ldid || true
           echo "=== ls ==="
           ls -la ldid
-          echo "=== symbols: codesign.swift entries ==="
-          nm -gU ldid 2>/dev/null | grep -iE "ldid_cs_main|CSVerifier|CSSuperDeepSigner|CSAdhocSigner|CSExtractor|CSDisplayer" || echo "NOT FOUND: codesign.swift symbols missing!"
+          echo "=== symbols: ldid_cs_main ==="
+          nm -gU ldid 2>/dev/null | grep -i ldid_cs_main || echo "NOT FOUND: ldid_cs_main missing!"
+          echo "=== symbols: codesign.swift other entries ==="
+          nm -gU ldid 2>/dev/null | grep -iE "CSVerifier|CSSuperDeepSigner|CSAdhocSigner|CSExtractor|CSDisplayer" || echo "NOT FOUND: other codesign.swift symbols missing"
           echo "=== symbols: main.swift entries ==="
           nm -gU ldid 2>/dev/null | grep -iE "printCDHash|printEntitlements|main" || true
 
