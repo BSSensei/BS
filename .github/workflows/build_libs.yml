@@ -89,7 +89,7 @@ jobs:
           \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
 
           ldid: main.swift codesign.swift codesign.o ldid-Bridging-Header.h deps
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security -Xlinker -u -Xlinker _ldid_cs_main
 
           clean:
           \t@rm -f ldid codesign.o ldid-Bridging-Header.h
