@@ -35,6 +35,13 @@ jobs:
             mv libpist_lib libplist_lib
           fi
 
+      - name: Rename ldid.swift to main.swift
+        run: |
+          if [ -f "ldid.swift" ] && [ ! -f "main.swift" ]; then
+            mv ldid.swift main.swift
+          fi
+          ls -la *.swift
+
       - name: Generate Makefile
         run: |
           python3 - <<'PY'
@@ -61,8 +68,8 @@ jobs:
           codesign.o: codesign.m ldidbridge.h deps
           \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
 
-          ldid: ldid.swift codesign.swift codesign.o ldid-Bridging-Header.h deps
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h ldid.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
+          ldid: main.swift codesign.swift codesign.o ldid-Bridging-Header.h deps
+          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
 
           clean:
           \t@rm -f ldid codesign.o ldid-Bridging-Header.h
