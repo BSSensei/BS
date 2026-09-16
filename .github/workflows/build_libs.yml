@@ -109,6 +109,41 @@ jobs:
             exit 1
           fi
 
+      - name: Diagnose codesign.swift
+        run: |
+          echo "=== 1) files present? ==="
+          ls -la main.swift codesign.swift codesign.m 2>&1 || true
+
+          echo "=== 2) ldid_cs_main defined in codesign.swift? ==="
+          grep -n "func ldid_cs_main" codesign.swift || echo "NO DEFINITION"
+
+          echo "=== 3) ldid_cs_main referenced in main.swift? ==="
+          grep -n "ldid_cs_main" main.swift || echo "NO REFERENCE"
+
+          echo "=== 4) swiftc version ==="
+          swiftc --version
+
+          echo "=== 5) compile codesign.swift alone ==="
+          xcrun --sdk iphoneos swiftc -target arm64-apple-ios16.5 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -O -parse-as-library \
+            -c codesign.swift -o /tmp/codesign_only.o 2>&1 | tail -30 || true
+          ls -la /tmp/codesign_only.o 2>&1 || true
+          echo "--- symbols in codesign_only.o ---"
+          nm /tmp/codesign_only.o 2>/dev/null | grep -i ldid_cs_main || echo "NOT IN OBJECT"
+
+          echo "=== 6) compile both files ==="
+          xcrun --sdk iphoneos swiftc -target arm64-apple-ios16.5 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -O -parse-as-library \
+            -c main.swift codesign.swift -o /tmp/pair.o 2>&1 | tail -30 || true
+          ls -la /tmp/pair.o 2>&1 || true
+          echo "--- symbols in pair.o ---"
+          nm /tmp/pair.o 2>/dev/null | grep -i ldid_cs_main || echo "NOT IN PAIR OBJECT"
+
+          echo "=== 7) is codesign.swift actually being passed by Makefile? ==="
+          grep -n "codesign.swift" Makefile || echo "NOT IN MAKEFILE"
+
       - name: Generate Makefile
         run: |
           python3 - <<'PY'
