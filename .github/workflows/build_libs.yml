@@ -135,9 +135,6 @@ jobs:
 
           all: ldid
 
-          ldid-Bridging-Header.h:
-          \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
-
           deps:
           \t@if [ ! -d "$(SDK)" ]; then \\
           \t\techo "=== Downloading iPhoneOS16.5 SDK ==="; \\
@@ -149,9 +146,11 @@ jobs:
           \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
 
           codesign_swift.o: codesign.swift deps
+          \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
           \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -parse-as-library -import-objc-header ldid-Bridging-Header.h -c codesign.swift -o codesign_swift.o
 
-          ldid: main.swift codesign_swift.o codesign.o ldid-Bridging-Header.h deps
+          ldid: main.swift codesign_swift.o codesign.o deps
+          \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
           \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid -import-objc-header ldid-Bridging-Header.h main.swift codesign_swift.o codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security
 
           clean:
