@@ -35,12 +35,32 @@ jobs:
             mv libpist_lib libplist_lib
           fi
 
-      - name: Rename ldid.swift to main.swift
+      - name: Prepare main.swift
         run: |
-          if [ -f "ldid.swift" ] && [ ! -f "main.swift" ]; then
-            mv ldid.swift main.swift
+          echo "=== Before ==="
+          ls -la *.swift || true
+
+          # 如果仓库自带 GUI 入口，先删掉
+          rm -f main.swift
+
+          if [ ! -f "ldid.swift" ]; then
+            echo "ERROR: ldid.swift not found after checkout/extract"
+            ls -la
+            exit 1
           fi
+
+          mv ldid.swift main.swift
+
+          echo "=== After ==="
           ls -la *.swift
+          echo "=== main.swift head ==="
+          head -20 main.swift
+
+          # 确保不是 GUI 入口
+          if grep -q "UIApplicationMain" main.swift; then
+            echo "ERROR: main.swift still contains UIApplicationMain (GUI entry)"
+            exit 1
+          fi
 
       - name: Generate Makefile
         run: |
