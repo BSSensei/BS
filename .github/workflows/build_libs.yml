@@ -40,7 +40,7 @@ jobs:
           echo "=== Before ==="
           ls -la *.swift || true
 
-          # 如果仓库自带 GUI 入口，先删掉
+          # 删除仓库里可能存在的 GUI 入口 main.swift
           rm -f main.swift
 
           if [ ! -f "ldid.swift" ]; then
@@ -105,10 +105,20 @@ jobs:
       - name: Build ldid
         run: make ldid
 
-      - name: Verify binary architecture
+      - name: Inspect binary (size & symbols)
         run: |
+          echo "=== file ==="
           file ldid
+          echo "=== lipo ==="
           lipo -info ldid || true
+          echo "=== size ==="
+          size ldid || true
+          echo "=== ls ==="
+          ls -la ldid
+          echo "=== symbols: codesign.swift entries ==="
+          nm -gU ldid 2>/dev/null | grep -iE "ldid_cs_main|CSVerifier|CSSuperDeepSigner|CSAdhocSigner|CSExtractor|CSDisplayer" || echo "NOT FOUND: codesign.swift symbols missing!"
+          echo "=== symbols: main.swift entries ==="
+          nm -gU ldid 2>/dev/null | grep -iE "printCDHash|printEntitlements|main" || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
