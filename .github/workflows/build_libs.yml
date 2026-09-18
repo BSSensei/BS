@@ -1,187 +1,82 @@
-name: Build ldid
+name: Build iOS ldid
 
 on:
   push:
-    branches: [ "main", "master", "dev" ]
+    branches: [main]
   pull_request:
-    branches: [ "main", "master" ]
-  release:
-    types: [created]
-  workflow_dispatch:
+    branches: [main]
 
 jobs:
-  build:
-    name: Build ldid (iOS arm64)
+  build-ios:
     runs-on: macos-14
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Extract ldid.zip
+      - name: Extract SDK
         run: |
-          if [ -f "ldid.zip" ]; then
-            unzip -q ldid.zip
-            if [ -d "ldid" ] && [ -f "ldid/Makefile" ]; then
-              mv ldid/* . 2>/dev/null || true
-              rm -rf ldid
-            fi
-            rm -f ldid.zip
-          fi
-          ls -la
-
-      - name: Fix libplist directory name
-        run: |
-          if [ -d "libpist_lib" ] && [ ! -d "libplist_lib" ]; then
-            mv libpist_lib libplist_lib
-          fi
-
-      - name: Prepare main.swift and codesign.swift
-        run: |
-          echo "=== Before ==="
-          ls -la *.swift || true
-
-          rm -f main.swift
-
-          if [ ! -f "ldid.swift" ]; then
-            echo "ERROR: ldid.swift not found"
-            ls -la
-            exit 1
-          fi
-
-          mv ldid.swift main.swift
-
-          cat > fix_main.py <<'PYEOF'
-          from pathlib import Path
-          import re
-
-          p = Path("main.swift")
-          src = p.read_text()
-
-          pattern = re.compile(
-              r'\nif\s+CommandLine\.arguments\.count\s*>\s*1\s*&&\s*\(.*?\)\s*\{\s*'
-              r'exit\(ldid_cs_main\(\)\)\s*\}\s*$',
-              re.DOTALL
-          )
-          src, n = pattern.subn("\n", src)
-          print("Removed %d top-level ldid_cs_main block(s)" % n)
-
-          anchor = "func main() {\n"
-          if anchor not in src:
-              raise SystemExit("ERROR: 'func main() {' not found")
-
-          inject = """func main() {
-              if CommandLine.arguments.count > 1 {
-                  let a = CommandLine.arguments
-                  if a.contains("--verify")
-                      || a.contains("--display")
-                      || a.contains("--extract-certificates")
-                      || a.contains("--extract-signature")
-                      || a.contains("--detached")
-                      || a.contains("--embed-signature")
-                      || a.contains("--unsign")
-                      || a.contains("--super-deep")
-                      || a.contains("--deep")
-                      || a.contains("--keychain")
-                  {
-                      exit(ldid_cs_main())
-                  }
-              }
-          """
-
-          src = src.replace(anchor, inject, 1)
-          p.write_text(src)
-          print("Injected ldid_cs_main routing into main()")
-          PYEOF
-
-          python3 fix_main.py
-          rm -f fix_main.py
-
-          cat > fix_codesign.py <<'PYEOF'
-          from pathlib import Path
-
-          p = Path("codesign.swift")
-          src = p.read_text()
-
-          old = "func ldid_cs_main() -> Int32 {"
-          new = '@_cdecl("ldid_cs_main")\npublic func ldid_cs_main() -> Int32 {'
-
-          if '@_cdecl("ldid_cs_main")' in src:
-              print("Already has @_cdecl")
-          elif old in src:
-              src = src.replace(old, new, 1)
-              p.write_text(src)
-              print("Added @_cdecl + public to ldid_cs_main")
-          else:
-              raise SystemExit("ERROR: ldid_cs_main not found in codesign.swift")
-          PYEOF
-
-          python3 fix_codesign.py
-          rm -f fix_codesign.py
-
-          echo "=== grep ==="
-          grep -n "ldid_cs_main" main.swift || true
-          grep -n "ldid_cs_main" codesign.swift || true
-
-      - name: Generate Makefile
-        run: |
-          cat > gen_makefile.py <<'PYEOF'
-          from pathlib import Path
-
-          makefile = '''SDK ?= ./sdks/iPhoneOS16.5.sdk
-          TARGET = arm64-apple-ios16.5
-          SWIFT_OPT = -O
-          CLANG_OPT = -O3
-          PWD := $(shell pwd)
-
-          XCC_INCLUDES = -Xcc -I./openssl_include -Xcc -I./libplist_include
-
-          all: ldid
-
-          deps:
-          \t@if [ ! -d "$(SDK)" ]; then \\
-          \t\techo "=== Downloading iPhoneOS16.5 SDK ==="; \\
-          \t\tmkdir -p sdks && \\
-          \t\tcurl -sL https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz | tar -xJ -C sdks; \\
-          \tfi
-
-          codesign.o: codesign.m ldidbridge.h deps
-          \tclang -c codesign.m -o codesign.o -isysroot $(SDK) -target $(TARGET) $(CLANG_OPT) -fobjc-arc -I. -I./openssl_include -I./libplist_include
-
-          ldid: main.swift codesign.swift codesign.o deps
-          \t@echo '#include "ldidbridge.h"' > ldid-Bridging-Header.h
-          \tswiftc $(SWIFT_OPT) -target $(TARGET) -sdk $(SDK) -module-name ldid $(XCC_INCLUDES) -import-objc-header ldid-Bridging-Header.h main.swift codesign.swift codesign.o -o ldid -L./openssl_lib -L./libplist_lib -I./openssl_include -I./libplist_include -lcrypto -lssl -lplist-2.0 -framework Foundation -framework Security -Xlinker -u -Xlinker _ldid_cs_main
-
-          clean:
-          \t@rm -f ldid codesign.o ldid-Bridging-Header.h
-
-          .PHONY: all clean deps
-          '''
-          Path("Makefile").write_text(makefile.replace("\\t", "\t"))
-          PYEOF
-
-          python3 gen_makefile.py
-          rm -f gen_makefile.py
-
-          echo "=== Makefile ==="
-          cat Makefile
+          unzip -o ldid.zip -d sdk
 
       - name: Download iOS SDK
-        run: make deps
+        run: |
+          wget -q https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          tar -xf iPhoneOS16.5.sdk.tar.xz
+          mv iPhoneOS16.5.sdk ios_sdk
+
+      - name: Build libarchive for iOS
+        run: |
+          wget -q https://github.com/libarchive/libarchive/releases/download/v3.7.4/libarchive-3.7.4.tar.xz
+          tar -xf libarchive-3.7.4.tar.xz
+          cd libarchive-3.7.4
+          cmake -B build -S . \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_SYSROOT=${{ github.workspace }}/ios_sdk \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DENABLE_ZLIB=ON \
+            -DENABLE_OPENSSL=OFF \
+            -DENABLE_LZMA=OFF \
+            -DENABLE_BZip2=OFF \
+            -DENABLE_LIBXML2=OFF \
+            -DENABLE_EXPAT=OFF \
+            -DENABLE_ZSTD=OFF \
+            -DENABLE_LZ4=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_C_FLAGS="-O3 -fvisibility=hidden" \
+            -DCMAKE_CXX_FLAGS="-O3 -fvisibility=hidden"
+          cmake --build build -j$(sysctl -n hw.ncpu)
+          cd ..
 
       - name: Build ldid
-        run: make ldid
-
-      - name: Inspect binary
         run: |
-          echo "=== file ==="
+          export SDKROOT=${{ github.workspace }}/ios_sdk
+          clang++ -std=c++20 \
+            -arch arm64 \
+            -isysroot $SDKROOT \
+            -miphoneos-version-min=15.0 \
+            -O3 \
+            -flto=full \
+            -funroll-loops \
+            -fomit-frame-pointer \
+            -fdata-sections -ffunction-sections \
+            -fvisibility=hidden \
+            -DNDEBUG \
+            -I sdk/openssl_include \
+            -I sdk/libplist_include \
+            -I libarchive-3.7.4/libarchive \
+            -L sdk/openssl_lib \
+            -L sdk/libplist_lib \
+            -o ldid ldid.cpp \
+            libarchive-3.7.4/build/libarchive/libarchive.a \
+            -lplist-2.0 -lssl -lcrypto \
+            -lz -ldl -lpthread \
+            -Wl,-dead_strip \
+            -Wl,-S
+
+      - name: Verify
+        run: |
           file ldid
-          echo "=== size ==="
-          size ldid || true
-          echo "=== ls ==="
-          ls -la ldid
-          echo "=== symbols ==="
-          nm -gU ldid 2>/dev/null | grep -i ldid_cs_main || echo "NOT FOUND: ldid_cs_main missing"
-          nm -gU ldid 2>/dev/null | grep -iE "CSVerifier|CSAdhocSigner|CSSuperDeepSigner" || echo "NOT FOUND: codesign classes missing"
+          lipo -info ldid
+          otool -l ldid | grep -A 5 LC_BUILD_VERSION || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
