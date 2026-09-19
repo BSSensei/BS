@@ -1,8 +1,11 @@
 name: Build ldid
 
 on:
-  push:
   workflow_dispatch:
+  push:
+    paths:
+      - 'ldid.zip'
+      - '.github/workflows/build_libs.yml'
 
 permissions:
   contents: read
@@ -21,6 +24,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Extract ldid source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf source
+          mkdir -p source
+          ditto -x -k ldid.zip source
+          test -f source/ldid.cpp
+          test -f source/ldid.hpp
+          echo "Source root: $(pwd)/source"
+          ls -la source
 
       - name: Show toolchain
         shell: bash
@@ -63,7 +78,7 @@ jobs:
             -I"${PLIST_PREFIX}/include" \
             -I"${ARCHIVE_PREFIX}/include" \
             -I"${CURL_PREFIX}/include" \
-            ldid.cpp \
+            source/ldid.cpp \
             -L"${OPENSSL_PREFIX}/lib" \
             -L"${PLIST_PREFIX}/lib" \
             -L"${ARCHIVE_PREFIX}/lib" \
@@ -97,6 +112,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Extract ldid source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf source
+          mkdir -p source
+          ditto -x -k ldid.zip source
+          test -f source/ldid.cpp
+          test -f source/ldid.hpp
+          echo "Source root: $(pwd)/source"
+          ls -la source
+
       - name: Show Apple toolchain
         shell: bash
         run: |
@@ -105,29 +132,39 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-path
           xcrun --sdk iphoneos clang --version
 
+          mkdir -p "$RUNNER_TEMP/ios-sdk"
+          curl -L --fail --retry 5 --retry-all-errors \
+            -o "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          tar -xJf "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" -C "$RUNNER_TEMP/ios-sdk"
+
+          IOS_SDK_DIR="$(find "$RUNNER_TEMP/ios-sdk" -type d -name 'iPhoneOS16.5.sdk' -print -quit)"
+          test -n "$IOS_SDK_DIR"
+          echo "IOS_SDK_DIR=$IOS_SDK_DIR" >> "$GITHUB_ENV"
+
       - name: Validate bundled dependencies
         shell: bash
         run: |
           set -euo pipefail
 
-          test -d openssl_include
-          test -d openssl_lib
-          test -d libplist_include
-          test -d libplist_lib
+          test -d source/openssl_include
+          test -d source/openssl_lib
+          test -d source/libplist_include
+          test -d source/libplist_lib
 
-          find openssl_lib -maxdepth 2 -type f -name '*.a' -print
-          find libplist_lib -maxdepth 2 -type f -name '*.a' -print
+          find source/openssl_lib -maxdepth 2 -type f -name '*.a' -print
+          find source/libplist_lib -maxdepth 2 -type f -name '*.a' -print
 
-          test -n "$(find openssl_lib -type f -name 'libcrypto*.a' -print -quit)"
-          test -n "$(find openssl_lib -type f -name 'libssl*.a' -print -quit)"
-          test -n "$(find libplist_lib -type f -name 'libplist*.a' -print -quit)"
+          test -n "$(find source/openssl_lib -type f -name 'libcrypto*.a' -print -quit)"
+          test -n "$(find source/openssl_lib -type f -name 'libssl*.a' -print -quit)"
+          test -n "$(find source/libplist_lib -type f -name 'libplist*.a' -print -quit)"
 
       - name: Build libarchive for iOS arm64
         shell: bash
         run: |
           set -euo pipefail
 
-          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          IOS_SDK="${IOS_SDK_DIR}"
           IOS_CC="$(xcrun --sdk iphoneos -f clang)"
           IOS_CXX="$(xcrun --sdk iphoneos -f clang++)"
 
@@ -182,11 +219,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          IOS_SDK="${IOS_SDK_DIR}"
           IOS_CC="$(xcrun --sdk iphoneos -f clang)"
           IOS_CXX="$(xcrun --sdk iphoneos -f clang++)"
-          OPENSSL_ROOT="${GITHUB_WORKSPACE}/openssl_lib"
-          OPENSSL_INC="${GITHUB_WORKSPACE}/openssl_include"
+          OPENSSL_ROOT="${GITHUB_WORKSPACE}/source/openssl_lib"
+          OPENSSL_INC="${GITHUB_WORKSPACE}/source/openssl_include"
 
           rm -rf third_party/curl-src third_party/curl-build
           mkdir -p third_party
@@ -249,9 +286,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          CRYPTO="$(find openssl_lib -type f -name 'libcrypto*.a' -print -quit)"
-          SSL="$(find openssl_lib -type f -name 'libssl*.a' -print -quit)"
-          PLIST="$(find libplist_lib -type f -name 'libplist*.a' -print -quit)"
+          CRYPTO="$(find source/openssl_lib -type f -name 'libcrypto*.a' -print -quit)"
+          SSL="$(find source/openssl_lib -type f -name 'libssl*.a' -print -quit)"
+          PLIST="$(find source/libplist_lib -type f -name 'libplist*.a' -print -quit)"
           ARCHIVE="$(find third_party/libarchive-build -type f -name 'libarchive*.a' -print -quit)"
           CURL="$(find third_party/curl-build -type f -name 'libcurl*.a' -print -quit)"
 
@@ -272,7 +309,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          IOS_SDK="${IOS_SDK_DIR}"
           IOS_CXX="$(xcrun --sdk iphoneos -f clang++)"
 
           mkdir -p build/ios
@@ -291,12 +328,12 @@ jobs:
             -isysroot "${IOS_SDK}" \
             -miphoneos-version-min="${IOS_DEPLOYMENT_TARGET}" \
             -Wall -Wextra -Wpedantic -Werror \
-            -I"${GITHUB_WORKSPACE}/openssl_include" \
-            -I"${GITHUB_WORKSPACE}/libplist_include" \
+            -I"${GITHUB_WORKSPACE}/source/openssl_include" \
+            -I"${GITHUB_WORKSPACE}/source/libplist_include" \
             -I"${GITHUB_WORKSPACE}/third_party/libarchive-src/libarchive" \
             -I"${GITHUB_WORKSPACE}/third_party/curl-src/include" \
             -I"${GITHUB_WORKSPACE}/third_party/curl-build/lib" \
-            ldid.cpp \
+            source/ldid.cpp \
             "${{ steps.libs.outputs.plist }}" \
             "${{ steps.libs.outputs.archive }}" \
             "${{ steps.libs.outputs.curl }}" \
