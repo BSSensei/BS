@@ -1,11 +1,9 @@
 name: Build ldid
 
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - 'ldid.zip'
-      - '.github/workflows/build_libs.yml'
+  workflow_dispatch:
+  
 
 permissions:
   contents: read
