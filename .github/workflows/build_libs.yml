@@ -1,9 +1,11 @@
 name: Build ldid
 
 on:
-  push:
   workflow_dispatch:
-  
+  push:
+    paths:
+      - 'ldid.zip'
+      - '.github/workflows/build_libs.yml'
 
 permissions:
   contents: read
@@ -263,6 +265,7 @@ jobs:
                 -DCURL_DISABLE_SMBS=ON \
                 -DCURL_DISABLE_MQTT=ON \
                 -DCURL_DISABLE_SRP=ON \
+                -DCURL_ENABLE_NTLM=OFF \
                 -DCURL_USE_LIBSSH2=OFF \
                 -DCURL_USE_GSSAPI=OFF \
                 -DCURL_USE_LIBPSL=OFF \
