@@ -1,12 +1,8 @@
 name: Build ldid
 
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - 'ldid.cpp'
-      - 'ldid.hpp'
-      - '.github/workflows/ldid.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
