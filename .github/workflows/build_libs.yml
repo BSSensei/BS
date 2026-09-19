@@ -3,76 +3,51 @@ name: Build ldid
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    paths:
+      - "ldid.zip"
+      - ".github/workflows/build_libs.yml"
   pull_request:
+    paths:
+      - "ldid.zip"
+      - ".github/workflows/build_libs.yml"
 
 permissions:
   contents: read
 
 env:
   IOS_DEPLOYMENT_TARGET: "13.0"
-
   IOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
 
   LIBARCHIVE_VERSION: "3.8.2"
-  LIBARCHIVE_URL: "https://github.com/libarchive/libarchive/releases/download/v3.8.2/libarchive-3.8.2.tar.xz"
-
   CURL_VERSION: "8.16.0"
-  CURL_URL: "https://curl.se/download/curl-8.16.0.tar.xz"
 
-  CMAKE_BUILD_PARALLEL_LEVEL: "4"
+  BUILD_TYPE: Release
 
 jobs:
-
-  # ============================================================
-  # macOS
-  # ============================================================
-
   macos:
-    name: macOS build + smoke test
+    name: macOS build
     runs-on: macos-14
 
     steps:
-
-      # ----------------------------------------------------------
-      # Checkout
-      # ----------------------------------------------------------
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # Homebrew dependencies
-      # ----------------------------------------------------------
-
       - name: Install dependencies
-        shell: bash
         run: |
           set -euo pipefail
 
           brew update
-
           brew install \
             openssl@3 \
             libplist \
             libarchive \
-            curl \
-            cmake \
-            ninja
-
-      # ----------------------------------------------------------
-      # Extract ldid.zip
-      # ----------------------------------------------------------
+            curl
 
       - name: Extract ldid source
-        shell: bash
         run: |
           set -euo pipefail
 
           rm -rf source
-
           mkdir -p source
 
           ditto -x -k ldid.zip source
@@ -80,82 +55,19 @@ jobs:
           test -f source/ldid.cpp
           test -f source/ldid.hpp
 
-          echo "===== source ====="
-
-          ls -lh \
-            source/ldid.cpp \
-            source/ldid.hpp
-
-      # ----------------------------------------------------------
-      # Validate bundled libraries
-      # ----------------------------------------------------------
-
-      - name: Validate bundled libraries
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -d source/openssl_lib
-          test -d source/openssl_include
-          test -d source/libplist_lib
-          test -d source/libplist_include
-
-          OPENSSL_SSL="$(
-            find source/openssl_lib \
-              -type f \
-              -name 'libssl.a' \
-              -print \
-              -quit
-          )"
-
-          OPENSSL_CRYPTO="$(
-            find source/openssl_lib \
-              -type f \
-              -name 'libcrypto.a' \
-              -print \
-              -quit
-          )"
-
-          LIBPLIST="$(
-            find source/libplist_lib \
-              -type f \
-              -name 'libplist*.a' \
-              -print \
-              -quit
-          )"
-
-          test -n "${OPENSSL_SSL}"
-          test -n "${OPENSSL_CRYPTO}"
-          test -n "${LIBPLIST}"
-
-          echo "OPENSSL_SSL=${OPENSSL_SSL}" >> "${GITHUB_ENV}"
-          echo "OPENSSL_CRYPTO=${OPENSSL_CRYPTO}" >> "${GITHUB_ENV}"
-          echo "LIBPLIST=${LIBPLIST}" >> "${GITHUB_ENV}"
-
-          echo "OpenSSL SSL:"
-          echo "  ${OPENSSL_SSL}"
-
-          echo "OpenSSL Crypto:"
-          echo "  ${OPENSSL_CRYPTO}"
-
-          echo "libplist:"
-          echo "  ${LIBPLIST}"
-
-      # ----------------------------------------------------------
-      # Build macOS ldid
-      # ----------------------------------------------------------
+          echo "Source tree:"
+          find source -maxdepth 2 -type f -print
 
       - name: Build ldid
-        shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p build/macos
-
           OPENSSL_PREFIX="$(brew --prefix openssl@3)"
-          LIBPLIST_PREFIX="$(brew --prefix libplist)"
-          LIBARCHIVE_PREFIX="$(brew --prefix libarchive)"
+          PLIST_PREFIX="$(brew --prefix libplist)"
+          ARCHIVE_PREFIX="$(brew --prefix libarchive)"
           CURL_PREFIX="$(brew --prefix curl)"
+
+          mkdir -p build/macos
 
           clang++ \
             -std=c++20 \
@@ -171,75 +83,53 @@ jobs:
             -Wpedantic \
             -Werror \
             -I"${OPENSSL_PREFIX}/include" \
-            -I"${LIBPLIST_PREFIX}/include" \
-            -I"${LIBARCHIVE_PREFIX}/include" \
+            -I"${PLIST_PREFIX}/include" \
+            -I"${ARCHIVE_PREFIX}/include" \
             -I"${CURL_PREFIX}/include" \
-            -Isource \
             source/ldid.cpp \
-            "${OPENSSL_PREFIX}/lib/libssl.a" \
-            "${OPENSSL_PREFIX}/lib/libcrypto.a" \
-            "${LIBPLIST_PREFIX}/lib/libplist-2.0.a" \
-            "${LIBARCHIVE_PREFIX}/lib/libarchive.a" \
-            "${CURL_PREFIX}/lib/libcurl.a" \
+            -L"${OPENSSL_PREFIX}/lib" \
+            -L"${PLIST_PREFIX}/lib" \
+            -L"${ARCHIVE_PREFIX}/lib" \
+            -L"${CURL_PREFIX}/lib" \
+            -lcrypto \
+            -lssl \
+            -lplist-2.0 \
+            -larchive \
+            -lcurl \
             -framework Security \
             -framework CoreFoundation \
-            -framework SystemConfiguration \
-            -framework CoreServices \
-            -framework IOKit \
-            -lz \
-            -lbz2 \
-            -liconv \
-            -lresolv \
-            -lc++ \
             -Wl,-dead_strip \
             -Wl,-no_compact_unwind \
             -o build/macos/ldid
 
-          test -s build/macos/ldid
-
-      # ----------------------------------------------------------
-      # macOS smoke test
-      # ----------------------------------------------------------
-
       - name: macOS smoke test
-        shell: bash
         run: |
           set -euo pipefail
 
           ./build/macos/ldid --version
 
+          mkdir -p /tmp/ldid-smoke
+          printf 'ldid smoke test\n' > /tmp/ldid-smoke/test.txt
+
+          ./build/macos/ldid -A /tmp/ldid-smoke/test.txt \
+            || true
+
           file build/macos/ldid
-
-          echo "macOS smoke test passed."
-
-  # ============================================================
-  # iOS
-  # ============================================================
+          otool -L build/macos/ldid
 
   ios:
-    name: iOS arm64
+    name: iOS arm64 build
     runs-on: macos-14
 
     steps:
-
-      # ----------------------------------------------------------
-      # Checkout
-      # ----------------------------------------------------------
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # Extract ldid.zip
-      # ----------------------------------------------------------
-
       - name: Extract ldid source
-        shell: bash
         run: |
           set -euo pipefail
 
           rm -rf source
-
           mkdir -p source
 
           ditto -x -k ldid.zip source
@@ -247,18 +137,10 @@ jobs:
           test -f source/ldid.cpp
           test -f source/ldid.hpp
 
-          echo "===== source ====="
+          echo "Extracted source:"
+          find source -maxdepth 2 -type f -print
 
-          ls -lh \
-            source/ldid.cpp \
-            source/ldid.hpp
-
-      # ----------------------------------------------------------
-      # Validate bundled OpenSSL / libplist
-      # ----------------------------------------------------------
-
-      - name: Validate bundled libraries
-        shell: bash
+      - name: Validate bundled dependencies
         run: |
           set -euo pipefail
 
@@ -267,198 +149,102 @@ jobs:
           test -d source/libplist_lib
           test -d source/libplist_include
 
-          OPENSSL_SSL="$(
-            find source/openssl_lib \
-              -type f \
-              -name 'libssl.a' \
-              -print \
-              -quit
-          )"
+          echo "OpenSSL:"
+          find source/openssl_lib -maxdepth 2 -type f -print
 
-          OPENSSL_CRYPTO="$(
-            find source/openssl_lib \
-              -type f \
-              -name 'libcrypto.a' \
-              -print \
-              -quit
-          )"
+          echo "OpenSSL headers:"
+          find source/openssl_include -maxdepth 2 -type f | head -50
 
-          LIBPLIST="$(
-            find source/libplist_lib \
-              -type f \
-              -name 'libplist*.a' \
-              -print \
-              -quit
-          )"
+          echo "libplist:"
+          find source/libplist_lib -maxdepth 2 -type f -print
 
-          test -n "${OPENSSL_SSL}"
-          test -n "${OPENSSL_CRYPTO}"
-          test -n "${LIBPLIST}"
-
-          echo "OPENSSL_SSL=${OPENSSL_SSL}" >> "${GITHUB_ENV}"
-          echo "OPENSSL_CRYPTO=${OPENSSL_CRYPTO}" >> "${GITHUB_ENV}"
-          echo "LIBPLIST=${LIBPLIST}" >> "${GITHUB_ENV}"
-
-          echo "===== OpenSSL ====="
-
-          file \
-            "${OPENSSL_SSL}" \
-            "${OPENSSL_CRYPTO}"
-
-          echo "===== libplist ====="
-
-          file "${LIBPLIST}"
-
-      # ----------------------------------------------------------
-      # Download exact iPhoneOS16.5 SDK
-      # ----------------------------------------------------------
+          echo "libplist headers:"
+          find source/libplist_include -maxdepth 2 -type f | head -50
 
       - name: Download iPhoneOS 16.5 SDK
-        shell: bash
         run: |
           set -euo pipefail
 
-          SDK_ROOT="${RUNNER_TEMP}/iphoneos-sdk"
-          SDK_ARCHIVE="${RUNNER_TEMP}/iPhoneOS16.5.sdk.tar.xz"
-
-          rm -rf "${SDK_ROOT}"
-
-          mkdir -p "${SDK_ROOT}"
+          mkdir -p "${RUNNER_TEMP}/ios-sdk"
 
           curl \
             --fail \
             --location \
             --retry 5 \
             --retry-all-errors \
-            --silent \
-            --show-error \
-            "${IOS_SDK_URL}" \
-            -o "${SDK_ARCHIVE}"
+            --connect-timeout 30 \
+            --max-time 600 \
+            -o "${RUNNER_TEMP}/iPhoneOS16.5.sdk.tar.xz" \
+            "${IOS_SDK_URL}"
 
-          test -s "${SDK_ARCHIVE}"
+          tar -xJf \
+            "${RUNNER_TEMP}/iPhoneOS16.5.sdk.tar.xz" \
+            -C "${RUNNER_TEMP}/ios-sdk"
 
-          tar \
-            -xJf "${SDK_ARCHIVE}" \
-            -C "${SDK_ROOT}"
+          IOS_SDK_DIR="$(find "${RUNNER_TEMP}/ios-sdk" -type d -name 'iPhoneOS16.5.sdk' -print -quit)"
 
-          IOS_SDK="$(
-            find "${SDK_ROOT}" \
-              -type d \
-              -name 'iPhoneOS16.5.sdk' \
-              -print \
-              -quit
-          )"
+          test -n "${IOS_SDK_DIR}"
+          test -d "${IOS_SDK_DIR}"
 
-          test -n "${IOS_SDK}"
-          test -d "${IOS_SDK}/usr/include"
+          echo "IOS_SDK_DIR=${IOS_SDK_DIR}" >> "${GITHUB_ENV}"
 
-          echo "IOS_SDK=${IOS_SDK}" >> "${GITHUB_ENV}"
-          echo "IOS_SDK_DIR=${IOS_SDK}" >> "${GITHUB_ENV}"
+          xcrun --sdk iphoneos --find clang
+          xcrun --sdk iphoneos --show-sdk-version
 
-          echo "===== SDK ====="
-          echo "${IOS_SDK}"
+          echo "Using SDK:"
+          echo "${IOS_SDK_DIR}"
 
-      # ----------------------------------------------------------
-      # Apple toolchain
-      # ----------------------------------------------------------
-
-      - name: Configure iOS toolchain
-        shell: bash
+      - name: Prepare build environment
         run: |
           set -euo pipefail
 
-          IOS_CC="$(xcrun --sdk iphoneos -f clang)"
-          IOS_CXX="$(xcrun --sdk iphoneos -f clang++)"
-          IOS_AR="$(xcrun --sdk iphoneos -f ar)"
-          IOS_RANLIB="$(xcrun --sdk iphoneos -f ranlib)"
-          IOS_STRIP="$(xcrun --sdk iphoneos -f strip)"
-          IOS_LIPO="$(xcrun --sdk iphoneos -f lipo)"
-          IOS_OTOOL="$(xcrun --sdk iphoneos -f otool)"
+          export SDKROOT="${IOS_SDK_DIR}"
 
-          echo "IOS_CC=${IOS_CC}" >> "${GITHUB_ENV}"
-          echo "IOS_CXX=${IOS_CXX}" >> "${GITHUB_ENV}"
+          IOS_CLANG="$(xcrun --sdk iphoneos --find clang)"
+          IOS_CLANGXX="$(xcrun --sdk iphoneos --find clang++)"
+          IOS_AR="$(xcrun --sdk iphoneos --find ar)"
+          IOS_RANLIB="$(xcrun --sdk iphoneos --find ranlib)"
+          IOS_STRIP="$(xcrun --sdk iphoneos --find strip)"
+
+          echo "IOS_CLANG=${IOS_CLANG}" >> "${GITHUB_ENV}"
+          echo "IOS_CLANGXX=${IOS_CLANGXX}" >> "${GITHUB_ENV}"
           echo "IOS_AR=${IOS_AR}" >> "${GITHUB_ENV}"
           echo "IOS_RANLIB=${IOS_RANLIB}" >> "${GITHUB_ENV}"
           echo "IOS_STRIP=${IOS_STRIP}" >> "${GITHUB_ENV}"
-          echo "IOS_LIPO=${IOS_LIPO}" >> "${GITHUB_ENV}"
-          echo "IOS_OTOOL=${IOS_OTOOL}" >> "${GITHUB_ENV}"
 
-          "${IOS_CC}" --version
-          "${IOS_CXX}" --version
-
-      # ==========================================================
-      # libarchive 3.8.2
-      # ==========================================================
-
-      - name: Download libarchive
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p third_party
-
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-all-errors \
-            --silent \
-            --show-error \
-            "${LIBARCHIVE_URL}" \
-            -o "${RUNNER_TEMP}/libarchive.tar.xz"
-
-          test -s "${RUNNER_TEMP}/libarchive.tar.xz"
-
-          rm -rf \
-            third_party/libarchive-src \
-            "third_party/libarchive-${LIBARCHIVE_VERSION}"
-
-          tar \
-            -xJf "${RUNNER_TEMP}/libarchive.tar.xz" \
-            -C third_party
-
-          test -d \
-            "third_party/libarchive-${LIBARCHIVE_VERSION}"
-
-          mv \
-            "third_party/libarchive-${LIBARCHIVE_VERSION}" \
-            third_party/libarchive-src
-
-          test -f \
-            third_party/libarchive-src/CMakeLists.txt
-
-      # ----------------------------------------------------------
-      # Build libarchive
-      #
-      # Only build the library.
-      #
-      # Disable all command line programs because ldid only needs
-      # libarchive's library API.
-      # ----------------------------------------------------------
+          echo "CC=${IOS_CLANG}" >> "${GITHUB_ENV}"
+          echo "CXX=${IOS_CLANGXX}" >> "${GITHUB_ENV}"
+          echo "AR=${IOS_AR}" >> "${GITHUB_ENV}"
+          echo "RANLIB=${IOS_RANLIB}" >> "${GITHUB_ENV}"
 
       - name: Build libarchive for iOS
-        shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf third_party/libarchive-build
+          rm -rf \
+            third_party/libarchive-build \
+            third_party/libarchive-install
+
+          mkdir -p \
+            third_party/libarchive-build \
+            third_party/libarchive-install
 
           cmake \
             -S third_party/libarchive-src \
             -B third_party/libarchive-build \
             -G Ninja \
-            --log-level=WARNING \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT="${IOS_SDK_DIR}" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET}" \
-            -DCMAKE_C_COMPILER="${IOS_CC}" \
-            -DCMAKE_CXX_COMPILER="${IOS_CXX}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="${IOS_CLANG}" \
+            -DCMAKE_CXX_COMPILER="${IOS_CLANGXX}" \
             -DCMAKE_AR="${IOS_AR}" \
             -DCMAKE_RANLIB="${IOS_RANLIB}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections" \
-            -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections" \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/third_party/libarchive-install" \
+            -DCMAKE_C_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing" \
+            -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing" \
             -DBUILD_SHARED_LIBS=OFF \
             -DENABLE_INSTALL=OFF \
             -DENABLE_TEST=OFF \
@@ -466,8 +252,8 @@ jobs:
             -DENABLE_CPIO=OFF \
             -DENABLE_CAT=OFF \
             -DENABLE_UNZIP=OFF \
-            -DENABLE_ACL=OFF \
             -DENABLE_XATTR=OFF \
+            -DENABLE_ACL=OFF \
             -DENABLE_ICONV=OFF \
             -DENABLE_CNG=OFF \
             -DENABLE_OPENSSL=OFF \
@@ -475,135 +261,77 @@ jobs:
             -DENABLE_NETTLE=OFF \
             -DENABLE_LIBB2=OFF
 
-          echo "===== libarchive build ====="
-
           if ! cmake \
             --build third_party/libarchive-build \
             --parallel \
-            --verbose; then
+            --verbose
+          then
+            echo "::error::libarchive build failed"
 
-            echo
-            echo "============================================================"
-            echo "LIBARCHIVE BUILD FAILED"
-            echo "============================================================"
-
-            echo
-            echo "===== CMakeError.log ====="
-
-            if test -f \
-              third_party/libarchive-build/CMakeFiles/CMakeError.log; then
-              cat \
-                third_party/libarchive-build/CMakeFiles/CMakeError.log
-            fi
-
-            echo
-            echo "===== CMakeOutput.log ====="
-
-            if test -f \
-              third_party/libarchive-build/CMakeFiles/CMakeOutput.log; then
-              tail -n 300 \
-                third_party/libarchive-build/CMakeFiles/CMakeOutput.log
-            fi
+            find third_party/libarchive-build/CMakeFiles \
+              -type f \
+              \( -name CMakeError.log -o -name CMakeOutput.log \) \
+              -print \
+              -exec tail -n 400 {} \; \
+              || true
 
             exit 1
           fi
 
-          LIBARCHIVE_A="$(
+      - name: Locate libarchive
+        run: |
+          set -euo pipefail
+
+          LIBARCHIVE_STATIC="$(
             find third_party/libarchive-build \
               -type f \
-              -name 'libarchive*.a' \
+              \( -name 'libarchive.a' -o -name 'libarchive_static.a' \) \
               -print \
-              -quit
+              | head -1
           )"
 
-          test -n "${LIBARCHIVE_A}"
-          test -f "${LIBARCHIVE_A}"
+          test -n "${LIBARCHIVE_STATIC}"
+          test -f "${LIBARCHIVE_STATIC}"
 
-          echo "LIBARCHIVE_A=${LIBARCHIVE_A}" >> "${GITHUB_ENV}"
+          echo "LIBARCHIVE_STATIC=${LIBARCHIVE_STATIC}" >> "${GITHUB_ENV}"
 
-          echo "===== libarchive.a ====="
+          file "${LIBARCHIVE_STATIC}"
 
-          file "${LIBARCHIVE_A}"
-
-          "${IOS_LIPO}" \
-            -info "${LIBARCHIVE_A}" || true
-
-      # ==========================================================
-      # curl 8.16.0
-      # ==========================================================
-
-      - name: Download curl
-        shell: bash
+      - name: Build curl 8.16.0 for iOS
         run: |
           set -euo pipefail
-
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-all-errors \
-            --silent \
-            --show-error \
-            "${CURL_URL}" \
-            -o "${RUNNER_TEMP}/curl.tar.xz"
-
-          test -s "${RUNNER_TEMP}/curl.tar.xz"
 
           rm -rf \
-            third_party/curl-src \
-            "third_party/curl-${CURL_VERSION}"
+            third_party/curl-build \
+            third_party/curl-install
 
-          tar \
-            -xJf "${RUNNER_TEMP}/curl.tar.xz" \
-            -C third_party
+          mkdir -p \
+            third_party/curl-build \
+            third_party/curl-install
 
-          test -d \
-            "third_party/curl-${CURL_VERSION}"
+          OPENSSL_ROOT="${GITHUB_WORKSPACE}/source"
 
-          mv \
-            "third_party/curl-${CURL_VERSION}" \
-            third_party/curl-src
-
-          test -f \
-            third_party/curl-src/CMakeLists.txt
-
-      # ----------------------------------------------------------
-      # Build curl
-      #
-      # IMPORTANT:
-      #
-      # _CURL_PREFILL=ON is the official curl mechanism for
-      # pre-filling known platform feature detection.
-      #
-      # This avoids unnecessary HAVE_ATOMIC and resolver-shape
-      # try_compile tests on the iOS build.
-      #
-      # CURL_ENABLE_NTLM=OFF avoids the DES/NTLM problem.
-      # ----------------------------------------------------------
-
-      - name: Build curl for iOS
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf third_party/curl-build
+          test -d "${OPENSSL_ROOT}/openssl_lib"
+          test -d "${OPENSSL_ROOT}/openssl_include"
 
           cmake \
             -S third_party/curl-src \
             -B third_party/curl-build \
             -G Ninja \
-            --log-level=WARNING \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT="${IOS_SDK_DIR}" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET}" \
-            -DCMAKE_C_COMPILER="${IOS_CC}" \
-            -DCMAKE_CXX_COMPILER="${IOS_CXX}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="${IOS_CLANG}" \
+            -DCMAKE_CXX_COMPILER="${IOS_CLANGXX}" \
             -DCMAKE_AR="${IOS_AR}" \
             -DCMAKE_RANLIB="${IOS_RANLIB}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections" \
-            -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections" \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/third_party/curl-install" \
+            -DCMAKE_C_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing" \
+            -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=EXECUTABLE \
+            -D_CURL_PREFILL=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_STATIC_LIBS=ON \
             -DBUILD_CURL_EXE=OFF \
@@ -614,140 +342,106 @@ jobs:
             -DENABLE_CURL_MANUAL=OFF \
             -DCURL_BUILD_EVERYTHING=OFF \
             -DCURL_DISABLE_INSTALL=ON \
-            -D_CURL_PREFILL=ON \
-            -DCURL_ENABLE_NTLM=OFF \
-            -C "${GITHUB_WORKSPACE}/.github/curl-ios-cache.cmake" \
-            -DCURL_USE_OPENSSL=ON \
-            -DCURL_USE_MBEDTLS=OFF \
-            -DCURL_USE_WOLFSSL=OFF \
-            -DCURL_USE_GNUTLS=OFF \
-            -DCURL_USE_RUSTLS=OFF \
-            -DCURL_USE_LIBSSH2=OFF \
-            -DCURL_USE_LIBSSH=OFF \
-            -DCURL_USE_GSSAPI=OFF \
-            -DCURL_USE_LIBPSL=OFF \
-            -DCURL_USE_LIBIDN2=OFF \
-            -DENABLE_ARES=OFF \
+            -DCURL_DISABLE_NTLM=ON \
             -DENABLE_THREADED_RESOLVER=OFF \
-            -DCURL_BROTLI=OFF \
-            -DCURL_ZSTD=OFF \
-            -DCURL_ZLIB=OFF \
+            -DCURL_USE_OPENSSL=ON \
+            -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT}" \
+            -DOPENSSL_INCLUDE_DIR="${OPENSSL_ROOT}/openssl_include" \
+            -DOPENSSL_CRYPTO_LIBRARY="${OPENSSL_ROOT}/openssl_lib/libcrypto.a" \
+            -DOPENSSL_SSL_LIBRARY="${OPENSSL_ROOT}/openssl_lib/libssl.a" \
             -DCURL_DISABLE_LDAP=ON \
             -DCURL_DISABLE_LDAPS=ON \
-            -DCURL_DISABLE_RTSP=ON \
             -DCURL_DISABLE_TELNET=ON \
-            -DCURL_DISABLE_TFTP=ON \
             -DCURL_DISABLE_DICT=ON \
+            -DCURL_DISABLE_FILE=ON \
             -DCURL_DISABLE_GOPHER=ON \
             -DCURL_DISABLE_IMAP=ON \
-            -DCURL_DISABLE_POP3=ON \
-            -DCURL_DISABLE_SMB=ON \
-            -DCURL_DISABLE_SMTP=ON \
+            -DCURL_DISABLE_IMAPS=ON \
             -DCURL_DISABLE_MQTT=ON \
-            -DCURL_DISABLE_SRP=ON \
-            -DCURL_DISABLE_WEBSOCKETS=ON \
-            -DCURL_DISABLE_NTLM=ON \
-            -DCURL_DISABLE_IPFS=ON \
-            -DOPENSSL_ROOT_DIR="${GITHUB_WORKSPACE}/source" \
-            -DOPENSSL_INCLUDE_DIR="${GITHUB_WORKSPACE}/source/openssl_include" \
-            -DOPENSSL_SSL_LIBRARY="${OPENSSL_SSL}" \
-            -DOPENSSL_CRYPTO_LIBRARY="${OPENSSL_CRYPTO}"
-
-          echo "===== curl build ====="
+            -DCURL_DISABLE_POP3=ON \
+            -DCURL_DISABLE_POP3S=ON \
+            -DCURL_DISABLE_RTSP=ON \
+            -DCURL_DISABLE_SMB=ON \
+            -DCURL_DISABLE_SMBS=ON \
+            -DCURL_DISABLE_SMTP=ON \
+            -DCURL_DISABLE_SMTPS=ON \
+            -DCURL_DISABLE_TFTP=ON \
+            -DCURL_DISABLE_WS=ON \
+            -DCURL_DISABLE_WSS=ON
 
           if ! cmake \
             --build third_party/curl-build \
             --parallel \
-            --verbose; then
+            --verbose
+          then
+            echo "::error::curl 8.16.0 build failed"
 
-            echo
-            echo "============================================================"
-            echo "CURL BUILD FAILED"
-            echo "============================================================"
+            echo "===== CMake errors ====="
+            find third_party/curl-build \
+              -type f \
+              \( -name CMakeError.log -o -name CMakeOutput.log \) \
+              -print \
+              -exec tail -n 500 {} \; \
+              || true
 
-            echo
-            echo "===== CMakeError.log ====="
-
-            if test -f \
-              third_party/curl-build/CMakeFiles/CMakeError.log; then
-              cat \
-                third_party/curl-build/CMakeFiles/CMakeError.log
-            fi
-
-            echo
-            echo "===== CMakeOutput.log ====="
-
-            if test -f \
-              third_party/curl-build/CMakeFiles/CMakeOutput.log; then
-              tail -n 300 \
-                third_party/curl-build/CMakeFiles/CMakeOutput.log
-            fi
+            echo "===== Last CMake files ====="
+            find third_party/curl-build/CMakeFiles \
+              -maxdepth 3 \
+              -type f \
+              -print \
+              | sort \
+              | tail -100 \
+              || true
 
             exit 1
           fi
 
-          CURL_A="$(
-            find third_party/curl-build \
-              -type f \
-              -name 'libcurl*.a' \
-              -print \
-              -quit
-          )"
-
-          test -n "${CURL_A}"
-          test -f "${CURL_A}"
-
-          echo "CURL_A=${CURL_A}" >> "${GITHUB_ENV}"
-
-          echo "===== libcurl.a ====="
-
-          file "${CURL_A}"
-
-          "${IOS_LIPO}" \
-            -info "${CURL_A}" || true
-
-      # ==========================================================
-      # libplist
-      # ==========================================================
-
-      - name: Locate bundled libplist
-        shell: bash
+      - name: Locate curl
         run: |
           set -euo pipefail
 
-          LIBPLIST_A="$(
-            find source/libplist_lib \
+          CURL_STATIC="$(
+            find third_party/curl-build \
               -type f \
-              -name 'libplist*.a' \
+              -name 'libcurl.a' \
               -print \
-              -quit
+              | head -1
           )"
 
-          test -n "${LIBPLIST_A}"
-          test -f "${LIBPLIST_A}"
+          test -n "${CURL_STATIC}"
+          test -f "${CURL_STATIC}"
 
-          echo "LIBPLIST_A=${LIBPLIST_A}" >> "${GITHUB_ENV}"
+          echo "CURL_STATIC=${CURL_STATIC}" >> "${GITHUB_ENV}"
 
-          file "${LIBPLIST_A}"
+          file "${CURL_STATIC}"
 
-      # ==========================================================
-      # Build ldid
-      # ==========================================================
-
-      - name: Build ldid for iOS
-        shell: bash
+      - name: Build ldid for iOS arm64
         run: |
           set -euo pipefail
 
           rm -rf build/ios
-
           mkdir -p build/ios
+
+          IOS_CXX="${IOS_CLANGXX}"
+
+          OPENSSL_INCLUDE="${GITHUB_WORKSPACE}/source/openssl_include"
+          OPENSSL_LIB="${GITHUB_WORKSPACE}/source/openssl_lib"
+
+          PLIST_INCLUDE="${GITHUB_WORKSPACE}/source/libplist_include"
+          PLIST_LIB="${GITHUB_WORKSPACE}/source/libplist_lib"
+
+          test -d "${OPENSSL_INCLUDE}"
+          test -d "${OPENSSL_LIB}"
+          test -d "${PLIST_INCLUDE}"
+          test -d "${PLIST_LIB}"
+          test -f "${LIBARCHIVE_STATIC}"
+          test -f "${CURL_STATIC}"
 
           "${IOS_CXX}" \
             -std=c++20 \
             -arch arm64 \
-            -miphoneos-version-min="${IOS_DEPLOYMENT_TARGET}" \
             -isysroot "${IOS_SDK_DIR}" \
+            -miphoneos-version-min="${IOS_DEPLOYMENT_TARGET}" \
             -O3 \
             -DNDEBUG \
             -flto=thin \
@@ -760,178 +454,88 @@ jobs:
             -Wextra \
             -Wpedantic \
             -Werror \
-            -I"${GITHUB_WORKSPACE}/source" \
-            -I"${GITHUB_WORKSPACE}/source/openssl_include" \
-            -I"${GITHUB_WORKSPACE}/source/libplist_include" \
-            -I"${GITHUB_WORKSPACE}/third_party/libarchive-src/libarchive" \
-            -I"${GITHUB_WORKSPACE}/third_party/curl-src/include" \
+            -I"${OPENSSL_INCLUDE}" \
+            -I"${PLIST_INCLUDE}" \
             source/ldid.cpp \
-            "${LIBPLIST_A}" \
-            "${LIBARCHIVE_A}" \
-            "${CURL_A}" \
-            "${OPENSSL_SSL}" \
-            "${OPENSSL_CRYPTO}" \
+            "${LIBARCHIVE_STATIC}" \
+            "${CURL_STATIC}" \
+            "${PLIST_LIB}/libplist-2.0.a" \
+            "${OPENSSL_LIB}/libssl.a" \
+            "${OPENSSL_LIB}/libcrypto.a" \
             -framework Security \
             -framework CoreFoundation \
-            -framework SystemConfiguration \
-            -framework CFNetwork \
-            -framework Foundation \
             -lz \
+            -licucore \
+            -lbz2 \
+            -llzma \
             -lc++ \
-            -dead_strip \
+            -Wl,-dead_strip \
             -Wl,-no_compact_unwind \
             -o build/ios/ldid
 
-          test -s build/ios/ldid
-
-      # ==========================================================
-      # Validate iOS binary
-      # ==========================================================
-
       - name: Validate iOS binary
-        shell: bash
         run: |
           set -euo pipefail
 
-          IOS_BIN="build/ios/ldid"
-
-          test -f "${IOS_BIN}"
-          test -s "${IOS_BIN}"
-
-          echo "===== file ====="
-
-          file "${IOS_BIN}"
-
-          echo "===== lipo ====="
-
-          "${IOS_LIPO}" \
-            -info "${IOS_BIN}"
-
-          echo "===== Mach-O header ====="
-
-          "${IOS_OTOOL}" \
-            -hv "${IOS_BIN}"
-
-          echo "===== LC_BUILD_VERSION ====="
-
-          "${IOS_OTOOL}" \
-            -l "${IOS_BIN}" | \
-            grep -A8 \
-              'LC_BUILD_VERSION' || true
-
-          echo "===== linked libraries ====="
-
-          "${IOS_OTOOL}" \
-            -L "${IOS_BIN}" || true
-
-          echo "===== external dependency check ====="
-
-          if "${IOS_OTOOL}" -L "${IOS_BIN}" | \
-            grep -E \
-              '/opt/homebrew|/usr/local/Cellar|libssl|libcrypto|libcurl'; then
-
-            echo "ERROR: unexpected external dependency detected."
-
-            exit 1
-          fi
-
-          echo "===== architecture ====="
-
-          "${IOS_LIPO}" \
-            -info "${IOS_BIN}" | \
-            grep -q 'arm64'
-
-          echo "iOS binary validation passed."
-
-      # ==========================================================
-      # Strip
-      # ==========================================================
-
-      - name: Strip iOS binary
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          "${IOS_STRIP}" \
-            -S \
-            build/ios/ldid
-
-          test -s build/ios/ldid
+          test -f build/ios/ldid
 
           file build/ios/ldid
 
-          "${IOS_LIPO}" \
-            -info build/ios/ldid
+          xcrun lipo -info build/ios/ldid
 
-      # ==========================================================
-      # Inspect code signature
-      # ==========================================================
+          xcrun otool -arch arm64 -l build/ios/ldid | \
+            grep -E \
+              'LC_BUILD_VERSION|platform|minos|sdk' \
+              || true
 
-      - name: Inspect codesign
-        shell: bash
+          xcrun otool -arch arm64 -L build/ios/ldid
+
+          ./build/ios/ldid --version \
+            || true
+
+      - name: Strip iOS binary
         run: |
           set -euo pipefail
 
-          if command -v codesign >/dev/null 2>&1; then
-            codesign \
-              --display \
-              --verbose=4 \
-              build/ios/ldid || true
-          else
-            echo "codesign unavailable."
-          fi
+          cp build/ios/ldid build/ios/ldid.stripped
 
-      # ==========================================================
-      # Package
-      # ==========================================================
+          "${IOS_STRIP}" \
+            -S \
+            -x \
+            build/ios/ldid.stripped
+
+          mv \
+            build/ios/ldid.stripped \
+            build/ios/ldid
+
+          file build/ios/ldid
+          xcrun lipo -info build/ios/ldid
 
       - name: Package iOS artifact
-        shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf dist
-
-          mkdir -p dist/package
-
-          cp \
-            build/ios/ldid \
-            dist/package/ldid
-
-          chmod 755 \
-            dist/package/ldid
+          mkdir -p release
 
           tar \
-            -C dist/package \
-            -czf dist/ldid-ios-arm64.tar.gz \
+            -C build/ios \
+            -czf release/ldid-ios-arm64.tar.gz \
             ldid
 
-          shasum \
-            -a 256 \
-            dist/ldid-ios-arm64.tar.gz \
-            > dist/ldid-ios-arm64.tar.gz.sha256
+          shasum -a 256 \
+            release/ldid-ios-arm64.tar.gz \
+            > release/ldid-ios-arm64.tar.gz.sha256
 
-          echo "===== artifact ====="
+          echo "===== Artifact ====="
+          ls -lh release/
 
-          ls -lh \
-            dist/ldid-ios-arm64.tar.gz \
-            dist/ldid-ios-arm64.tar.gz.sha256
-
-          echo "===== SHA256 ====="
-
-          cat \
-            dist/ldid-ios-arm64.tar.gz.sha256
-
-      # ==========================================================
-      # Upload ONLY iOS
-      # ==========================================================
+          cat release/ldid-ios-arm64.tar.gz.sha256
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: ldid-ios-arm64
           path: |
-            dist/ldid-ios-arm64.tar.gz
-            dist/ldid-ios-arm64.tar.gz.sha256
+            release/ldid-ios-arm64.tar.gz
+            release/ldid-ios-arm64.tar.gz.sha256
           if-no-files-found: error
-          retention-days: 30
