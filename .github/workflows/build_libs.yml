@@ -293,202 +293,80 @@ jobs:
           echo "Using SDK:"
           echo "$IOS_SDK_DIR"
 
-      # ----------------------------------------------------------
-      # Validate bundled libraries
-      #
-      # IMPORTANT:
-      #
-      # ldid.zip is extracted to:
-      #
-      # source/
-      #   openssl_lib/
-      #   openssl_include/
-      #   libplist_lib/
-      #   libplist_include/
-      #
-      # Do NOT assume libssl.a/libcrypto.a are directly below
-      # openssl_lib. Search recursively.
-      # ----------------------------------------------------------
-
-      - name: Validate bundled libraries
+          - name: Build libarchive for iOS
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "========================================"
-          echo "Workspace"
-          echo "========================================"
+          rm -rf third_party/libarchive-build
 
-          pwd
+          cmake \
+            -S third_party/libarchive-src \
+            -B third_party/libarchive-build \
+            -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT="$IOS_SDK_DIR" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_C_COMPILER="$IOS_CC" \
+            -DCMAKE_CXX_COMPILER="$IOS_CXX" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections" \
+            -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections" \
+            -DBUILD_SHARED_LIBS=OFF \
+            \
+            -DENABLE_TEST=OFF \
+            \
+            -DENABLE_TAR=OFF \
+            -DENABLE_CPIO=OFF \
+            -DENABLE_CAT=OFF \
+            -DENABLE_UNZIP=OFF \
+            \
+            -DENABLE_BSDTAR=OFF \
+            -DENABLE_BSDCPIO=OFF \
+            -DENABLE_BSDCAT=OFF \
+            \
+            -DENABLE_ACL=OFF \
+            -DENABLE_XATTR=OFF \
+            -DENABLE_ICONV=OFF \
+            \
+            -DENABLE_LIBXML2=OFF \
+            -DENABLE_EXPAT=OFF \
+            \
+            -DENABLE_LZ4=OFF \
+            -DENABLE_LZMA=OFF \
+            -DENABLE_ZSTD=OFF \
+            -DENABLE_BZip2=OFF \
+            \
+            -DENABLE_CNG=OFF \
+            -DENABLE_OPENSSL=OFF \
+            -DENABLE_MBEDTLS=OFF \
+            -DENABLE_NETTLE=OFF
 
-          ls -la
+          cmake \
+            --build third_party/libarchive-build \
+            --parallel
 
-          echo "========================================"
-          echo "Source"
-          echo "========================================"
-
-          test -d source
-
-          find source \
-            -maxdepth 3 \
-            -print
-
-          test -f source/ldid.cpp
-          test -f source/ldid.hpp
-
-          # ------------------------------------------------------
-          # OpenSSL
-          # ------------------------------------------------------
-
-          OPENSSL_ROOT="$GITHUB_WORKSPACE/source/openssl_lib"
-          OPENSSL_INC="$GITHUB_WORKSPACE/source/openssl_include"
-
-          echo "========================================"
-          echo "OpenSSL"
-          echo "========================================"
-
-          echo "OPENSSL_ROOT:"
-          echo "$OPENSSL_ROOT"
-
-          echo "OPENSSL_INC:"
-          echo "$OPENSSL_INC"
-
-          test -d "$OPENSSL_ROOT"
-          test -d "$OPENSSL_INC"
-
-          echo "OpenSSL files:"
-
-          find "$OPENSSL_ROOT" \
-            -type f \
-            -print
-
-          echo "OpenSSL headers:"
-
-          find "$OPENSSL_INC" \
-            -type f \
-            -print | head -100
-
-          OPENSSL_SSL="$(
-            find "$OPENSSL_ROOT" \
+          LIBARCHIVE_A="$(
+            find third_party/libarchive-build \
               -type f \
-              -name "libssl.a" \
+              -name "libarchive*.a" \
               -print \
               -quit
           )"
 
-          OPENSSL_CRYPTO="$(
-            find "$OPENSSL_ROOT" \
-              -type f \
-              -name "libcrypto.a" \
-              -print \
-              -quit
-          )"
+          test -n "$LIBARCHIVE_A"
+          test -f "$LIBARCHIVE_A"
 
-          echo "OPENSSL_SSL:"
-          echo "$OPENSSL_SSL"
-
-          echo "OPENSSL_CRYPTO:"
-          echo "$OPENSSL_CRYPTO"
-
-          test -n "$OPENSSL_SSL"
-          test -n "$OPENSSL_CRYPTO"
-
-          test -f "$OPENSSL_SSL"
-          test -f "$OPENSSL_CRYPTO"
-
-          # ------------------------------------------------------
-          # libplist
-          # ------------------------------------------------------
-
-          PLIST_ROOT="$GITHUB_WORKSPACE/source/libplist_lib"
-          PLIST_INC="$GITHUB_WORKSPACE/source/libplist_include"
+          echo "LIBARCHIVE_A=$GITHUB_WORKSPACE/$LIBARCHIVE_A" >> "$GITHUB_ENV"
 
           echo "========================================"
-          echo "libplist"
+          echo "libarchive"
           echo "========================================"
 
-          echo "PLIST_ROOT:"
-          echo "$PLIST_ROOT"
+          file "$LIBARCHIVE_A"
 
-          echo "PLIST_INC:"
-          echo "$PLIST_INC"
-
-          test -d "$PLIST_ROOT"
-          test -d "$PLIST_INC"
-
-          echo "libplist files:"
-
-          find "$PLIST_ROOT" \
-            -type f \
-            -print
-
-          echo "libplist headers:"
-
-          find "$PLIST_INC" \
-            -type f \
-            -print | head -100
-
-          PLIST_A="$(
-            find "$PLIST_ROOT" \
-              -type f \
-              -name "libplist*.a" \
-              -print \
-              -quit
-          )"
-
-          echo "PLIST_A:"
-          echo "$PLIST_A"
-
-          test -n "$PLIST_A"
-
-          test -f "$PLIST_A"
-
-          # ------------------------------------------------------
-          # Architecture information
-          # ------------------------------------------------------
-
-          echo "========================================"
-          echo "OpenSSL libssl"
-          echo "========================================"
-
-          file "$OPENSSL_SSL"
-
-          lipo -info "$OPENSSL_SSL" || true
-
-          echo "========================================"
-          echo "OpenSSL libcrypto"
-          echo "========================================"
-
-          file "$OPENSSL_CRYPTO"
-
-          lipo -info "$OPENSSL_CRYPTO" || true
-
-          echo "========================================"
-          echo "libplist"
-          echo "========================================"
-
-          file "$PLIST_A"
-
-          lipo -info "$PLIST_A" || true
-
-          # ------------------------------------------------------
-          # Export exact paths
-          # ------------------------------------------------------
-
-          echo "OPENSSL_ROOT=$OPENSSL_ROOT" >> "$GITHUB_ENV"
-          echo "OPENSSL_INC=$OPENSSL_INC" >> "$GITHUB_ENV"
-
-          echo "OPENSSL_SSL=$OPENSSL_SSL" >> "$GITHUB_ENV"
-          echo "OPENSSL_CRYPTO=$OPENSSL_CRYPTO" >> "$GITHUB_ENV"
-
-          echo "PLIST_ROOT=$PLIST_ROOT" >> "$GITHUB_ENV"
-          echo "PLIST_INC=$PLIST_INC" >> "$GITHUB_ENV"
-          echo "PLIST_A=$PLIST_A" >> "$GITHUB_ENV"
-
-          echo "========================================"
-          echo "Bundled library validation successful"
-          echo "========================================"
-
+          lipo -info "$LIBARCHIVE_A" || true
       # ----------------------------------------------------------
       # Download libarchive
       # ----------------------------------------------------------
