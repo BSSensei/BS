@@ -198,106 +198,102 @@ jobs:
 
           mv libarchive-3.8.2 third_party/libarchive-src
 
-          test -f third_party/libarchive-src/CMakeLists.txt
+          test -x third_party/libarchive-src/configure
 
       # --------------------------------------------------------
-      # Build libarchive (CMake)
+      # Build libarchive (autotools + config.cache)
       #
-      # We use CMake here on purpose: libarchive's autotools
-      # configure runs AC_CHECK_SIZEOF / AC_RUN_IFELSE tests
-      # which cannot run under iOS cross-compilation without a
-      # fully pre-seeded config.cache. CMake handles cross
-      # compiles much better.
-      #
-      # The only iOS-specific override needed is disabling
-      # HAVE_FUTIMESAT, which is detected on macOS but is not
-      # available on iOS.
+      # autotools' AC_CHECK_SIZEOF / AC_RUN_IFELSE cannot run
+      # under iOS cross-compilation, so we pre-seed config.cache
+      # with iOS arm64 (LP64) values and force-disable functions
+      # that exist on macOS but not on iOS (futimesat, etc.).
       # --------------------------------------------------------
 
-      - name: Configure libarchive
+      - name: Configure and build libarchive
         run: |
           set -euo pipefail
 
-          rm -rf \
-            third_party/libarchive-build \
-            third_party/libarchive-install
+          cd third_party/libarchive-src
 
-          mkdir -p \
-            third_party/libarchive-build \
-            third_party/libarchive-install
+          export CC="${IOS_CLANG}"
+          export CXX="${IOS_CLANGXX}"
+          export AR="${IOS_AR}"
+          export RANLIB="${IOS_RANLIB}"
+          export CFLAGS="${IOS_CFLAGS}"
+          export CXXFLAGS="${IOS_CFLAGS}"
+          export LDFLAGS="${IOS_LDFLAGS}"
 
-          cmake \
-            -S third_party/libarchive-src \
-            -B third_party/libarchive-build \
-            -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT="${IOS_SDK_DIR}" \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER="${IOS_CLANG}" \
-            -DCMAKE_CXX_COMPILER="${IOS_CLANGXX}" \
-            -DCMAKE_AR="${IOS_AR}" \
-            -DCMAKE_RANLIB="${IOS_RANLIB}" \
-            -DCMAKE_C_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing -DHAVE_FUTIMESAT=0 -DHAVE_FUTIMENS=0 -DHAVE_UTIMENSAT=0 -DHAVE_LUTIMES=0" \
-            -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing -DHAVE_FUTIMESAT=0 -DHAVE_FUTIMENS=0 -DHAVE_UTIMENSAT=0 -DHAVE_LUTIMES=0" \
-            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_INSTALL=OFF \
-            -DENABLE_TEST=OFF \
-            -DENABLE_TAR=OFF \
-            -DENABLE_CPIO=OFF \
-            -DENABLE_CAT=OFF \
-            -DENABLE_UNZIP=OFF \
-            -DENABLE_XATTR=OFF \
-            -DENABLE_ACL=OFF \
-            -DENABLE_ICONV=OFF \
-            -DENABLE_CNG=OFF \
-            -DENABLE_OPENSSL=OFF \
-            -DENABLE_MBEDTLS=OFF \
-            -DENABLE_NETTLE=OFF \
-            -DENABLE_LZ4=OFF \
-            -DENABLE_LZO=OFF \
-            -DENABLE_LZMA=OFF \
-            -DENABLE_ZSTD=OFF \
-            -DENABLE_BZip2=OFF \
-            -DENABLE_LIBXML2=OFF \
-            -DENABLE_EXPAT=OFF \
-            -DENABLE_PCREPOSIX=OFF \
-            -DENABLE_PCRE2POSIX=OFF
+          PREFIX="${GITHUB_WORKSPACE}/third_party/libarchive-install"
+          rm -rf "${PREFIX}"
+          mkdir -p "${PREFIX}"
 
-      - name: Build libarchive
-        run: |
-          set -euo pipefail
+          cat > config.cache <<'EOF'
+          ac_cv_sizeof_int=4
+          ac_cv_sizeof_long=8
+          ac_cv_sizeof_long_long=8
+          ac_cv_sizeof_short=2
+          ac_cv_sizeof_void_p=8
+          ac_cv_sizeof_char_p=8
+          ac_cv_sizeof_size_t=8
+          ac_cv_sizeof_off_t=8
+          ac_cv_sizeof_ino_t=8
+          ac_cv_sizeof_dev_t=4
+          ac_cv_sizeof_mode_t=2
+          ac_cv_sizeof_uid_t=4
+          ac_cv_sizeof_gid_t=4
+          ac_cv_sizeof_pid_t=4
+          ac_cv_sizeof_wchar_t=4
+          ac_cv_sizeof_intptr_t=8
+          ac_cv_sizeof_uintptr_t=8
+          ac_cv_sizeof_intmax_t=8
+          ac_cv_sizeof_uintmax_t=8
+          ac_cv_sizeof_uint8_t=1
+          ac_cv_sizeof_uint16_t=2
+          ac_cv_sizeof_uint32_t=4
+          ac_cv_sizeof_uint64_t=8
+          ac_cv_sizeof_int8_t=1
+          ac_cv_sizeof_int16_t=2
+          ac_cv_sizeof_int32_t=4
+          ac_cv_sizeof_int64_t=8
+          ac_cv_sizeof___int64=0
+          ac_cv_sizeof_unsigned___int64=0
+          ac_cv_func_futimesat=no
+          ac_cv_func_futimens=no
+          ac_cv_func_utimensat=no
+          ac_cv_func_lutimes=no
+          ac_cv_c_undeclared_builtin_options=none
+          ac_cv_have_working_undeclared_builtins=no
+          EOF
 
-          cmake \
-            --build third_party/libarchive-build \
-            --parallel \
-            --verbose
+          ./configure \
+            --host=arm-apple-darwin \
+            --prefix="${PREFIX}" \
+            --cache-file=config.cache \
+            --disable-shared \
+            --enable-static \
+            --disable-bsdtar \
+            --disable-bsdcpio \
+            --disable-bsdcat \
+            --disable-bsdunzip \
+            --without-openssl \
+            --without-xml2 \
+            --without-expat \
+            --without-lz4 \
+            --without-lzo2 \
+            --without-lzma \
+            --without-zstd \
+            --without-bz2lib \
+            --without-iconv \
+            --without-acl \
+            --without-xattr
 
-      - name: Locate libarchive
-        run: |
-          set -euo pipefail
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
 
-          LIBARCHIVE_STATIC="$(
-            find third_party/libarchive-build \
-              -type f \
-              \( \
-                -name 'libarchive.a' \
-                -o \
-                -name 'libarchive_static.a' \
-              \) \
-              -print \
-              | head -1
-          )"
+          test -f "${PREFIX}/lib/libarchive.a"
 
-          test -n "${LIBARCHIVE_STATIC}"
-          test -f "${LIBARCHIVE_STATIC}"
-
-          echo "LIBARCHIVE_STATIC=${LIBARCHIVE_STATIC}" >> "${GITHUB_ENV}"
-
-          echo "===== libarchive ====="
-          file "${LIBARCHIVE_STATIC}"
+          echo "===== libarchive.a ====="
+          file "${PREFIX}/lib/libarchive.a"
 
       # --------------------------------------------------------
       # Download curl source
@@ -355,7 +351,7 @@ jobs:
           find "${OPENSSL_PREFIX}" -maxdepth 2 -type f | head -20
 
       # --------------------------------------------------------
-      # Build curl (autotools)
+      # Build curl (autotools + config.cache)
       # --------------------------------------------------------
 
       - name: Configure and build curl
@@ -376,9 +372,48 @@ jobs:
           rm -rf "${PREFIX}"
           mkdir -p "${PREFIX}"
 
+          cat > config.cache <<'EOF'
+          ac_cv_sizeof_int=4
+          ac_cv_sizeof_long=8
+          ac_cv_sizeof_long_long=8
+          ac_cv_sizeof_short=2
+          ac_cv_sizeof_void_p=8
+          ac_cv_sizeof_char_p=8
+          ac_cv_sizeof_size_t=8
+          ac_cv_sizeof_off_t=8
+          ac_cv_sizeof_ino_t=8
+          ac_cv_sizeof_dev_t=4
+          ac_cv_sizeof_mode_t=2
+          ac_cv_sizeof_uid_t=4
+          ac_cv_sizeof_gid_t=4
+          ac_cv_sizeof_pid_t=4
+          ac_cv_sizeof_wchar_t=4
+          ac_cv_sizeof_intptr_t=8
+          ac_cv_sizeof_uintptr_t=8
+          ac_cv_sizeof_intmax_t=8
+          ac_cv_sizeof_uintmax_t=8
+          ac_cv_sizeof_uint8_t=1
+          ac_cv_sizeof_uint16_t=2
+          ac_cv_sizeof_uint32_t=4
+          ac_cv_sizeof_uint64_t=8
+          ac_cv_sizeof_int8_t=1
+          ac_cv_sizeof_int16_t=2
+          ac_cv_sizeof_int32_t=4
+          ac_cv_sizeof_int64_t=8
+          ac_cv_sizeof___int64=0
+          ac_cv_sizeof_unsigned___int64=0
+          ac_cv_func_futimesat=no
+          ac_cv_func_futimens=no
+          ac_cv_func_utimensat=no
+          ac_cv_func_lutimes=no
+          ac_cv_c_undeclared_builtin_options=none
+          ac_cv_have_working_undeclared_builtins=no
+          EOF
+
           ./configure \
             --host=arm-apple-darwin \
             --prefix="${PREFIX}" \
+            --cache-file=config.cache \
             --disable-shared \
             --enable-static \
             --with-openssl="${OPENSSL_PREFIX}" \
@@ -429,12 +464,13 @@ jobs:
           PLIST_INCLUDE="${GITHUB_WORKSPACE}/source/libplist_include"
           PLIST_LIB="${GITHUB_WORKSPACE}/source/libplist_lib"
 
+          LIBARCHIVE_A="${GITHUB_WORKSPACE}/third_party/libarchive-install/lib/libarchive.a"
           CURL_A="${GITHUB_WORKSPACE}/third_party/curl-install/lib/libcurl.a"
 
           test -f "${OPENSSL_LIB}/libcrypto.a"
           test -f "${OPENSSL_LIB}/libssl.a"
           test -f "${PLIST_LIB}/libplist-2.0.a"
-          test -f "${LIBARCHIVE_STATIC}"
+          test -f "${LIBARCHIVE_A}"
           test -f "${CURL_A}"
 
           "${IOS_CLANGXX}" \
@@ -457,7 +493,7 @@ jobs:
             -I"${OPENSSL_INCLUDE}" \
             -I"${PLIST_INCLUDE}" \
             source/ldid.cpp \
-            "${LIBARCHIVE_STATIC}" \
+            "${LIBARCHIVE_A}" \
             "${CURL_A}" \
             "${PLIST_LIB}/libplist-2.0.a" \
             "${OPENSSL_LIB}/libssl.a" \
