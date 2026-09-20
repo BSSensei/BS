@@ -339,13 +339,7 @@ jobs:
           EOF
 
           cat build/toolchain/ios-arm64.cmake
-
-
-      # ==========================================================
-      # Download / build libarchive
-      # ==========================================================
-
-      - name: Configure libarchive
+       - name: Configure libarchive
         shell: bash
         run: |
           set -euo pipefail
@@ -367,10 +361,6 @@ jobs:
             -DENABLE_CPIO=OFF \
             -DENABLE_CAT=OFF \
             -DENABLE_UNZIP=OFF \
-            -DENABLE_TAR_SHARED=OFF \
-            -DENABLE_CPIO_SHARED=OFF \
-            -DENABLE_CAT_SHARED=OFF \
-            -DENABLE_UNZIP_SHARED=OFF \
             -DENABLE_ACL=OFF \
             -DENABLE_XATTR=OFF \
             -DENABLE_ICONV=OFF \
@@ -391,6 +381,39 @@ jobs:
             -DENABLE_ZLIB=ON \
             -DZLIB_LIBRARY=/usr/lib/libz.tbd \
             -DZLIB_INCLUDE_DIR="${IOS_SDK_DIR}/usr/include"
+
+          test -f build/libarchive/CMakeCache.txt
+
+          echo "===== libarchive detected futimesat ====="
+          grep -R "HAVE_FUTIMESAT" \
+            build/libarchive \
+            --include='*.h' \
+            --include='CMakeCache.txt' \
+            || true
+
+          # iOS does not provide futimesat().
+          # libarchive uses #if defined(HAVE_FUTIMESAT), so the
+          # macro must be removed rather than defined as 0.
+          while IFS= read -r -d '' f; do
+            sed -i '' '/^[[:space:]]*#define[[:space:]]\+HAVE_FUTIMESAT[[:space:]]/d' "$f"
+          done < <(
+            find build/libarchive \
+              -type f \
+              \( -name 'archive_platform.h' -o -name 'config.h' \) \
+              -print0
+          )
+
+          echo "===== libarchive HAVE_FUTIMESAT after fix ====="
+          if grep -R "HAVE_FUTIMESAT" \
+              build/libarchive \
+              --include='*.h' \
+              --include='CMakeCache.txt'; then
+            echo "ERROR: HAVE_FUTIMESAT is still defined"
+            exit 1
+          fi
+
+      # ==========================================================
+      # Download / build libarchive
 
       - name: Build libarchive
         shell: bash
