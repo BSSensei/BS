@@ -22,13 +22,12 @@ env:
   IOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
 
   LIBARCHIVE_VERSION: "3.8.2"
-  CURL_VERSION: "8.16.0"
-
   LIBARCHIVE_URL: "https://www.libarchive.org/downloads/libarchive-3.8.2.tar.xz"
+
+  CURL_VERSION: "8.16.0"
   CURL_URL: "https://curl.se/download/curl-8.16.0.tar.xz"
 
 jobs:
-
   ios:
     name: Build iOS arm64
     runs-on: macos-14
@@ -36,17 +35,17 @@ jobs:
 
     steps:
 
-      # ==========================================================
+      # ============================================================
       # Checkout
-      # ==========================================================
+      # ============================================================
 
       - name: Checkout
         uses: actions/checkout@v5
 
 
-      # ==========================================================
+      # ============================================================
       # Extract ldid.zip
-      # ==========================================================
+      # ============================================================
 
       - name: Extract ldid source
         shell: bash
@@ -54,7 +53,6 @@ jobs:
           set -euo pipefail
 
           rm -rf source
-
           mkdir -p source
 
           ditto -x -k ldid.zip source
@@ -72,9 +70,9 @@ jobs:
           find source -maxdepth 2 -type f -print
 
 
-      # ==========================================================
+      # ============================================================
       # Download exact iPhoneOS 16.5 SDK
-      # ==========================================================
+      # ============================================================
 
       - name: Download iPhoneOS 16.5 SDK
         shell: bash
@@ -85,7 +83,6 @@ jobs:
           SDK_ROOT="${RUNNER_TEMP}/iphoneos-sdk"
 
           rm -rf "${SDK_ROOT}"
-
           mkdir -p "${SDK_ROOT}"
 
           curl \
@@ -129,9 +126,9 @@ jobs:
             || true
 
 
-      # ==========================================================
-      # Apple compiler
-      # ==========================================================
+      # ============================================================
+      # Configure Apple Clang
+      # ============================================================
 
       - name: Configure iOS compiler
         shell: bash
@@ -163,9 +160,9 @@ jobs:
           "${IOS_CLANGXX}" --version
 
 
-      # ==========================================================
+      # ============================================================
       # Validate bundled OpenSSL / libplist
-      # ==========================================================
+      # ============================================================
 
       - name: Validate bundled libraries
         shell: bash
@@ -212,21 +209,27 @@ jobs:
           test -n "${SSL}"
           test -n "${PLIST}"
 
+          test -f "${CRYPTO}"
+          test -f "${SSL}"
+          test -f "${PLIST}"
+
           echo "CRYPTO=${CRYPTO}" >> "${GITHUB_ENV}"
           echo "SSL=${SSL}" >> "${GITHUB_ENV}"
           echo "PLIST=${PLIST}" >> "${GITHUB_ENV}"
 
-          echo "===== OpenSSL ====="
+          echo "===== OpenSSL crypto ====="
           file "${CRYPTO}"
+
+          echo "===== OpenSSL ssl ====="
           file "${SSL}"
 
           echo "===== libplist ====="
           file "${PLIST}"
 
 
-      # ==========================================================
+      # ============================================================
       # Download libarchive
-      # ==========================================================
+      # ============================================================
 
       - name: Download libarchive
         shell: bash
@@ -248,7 +251,6 @@ jobs:
           test -s third_party/libarchive.tar.xz
 
           rm -rf third_party/libarchive
-
           mkdir -p third_party/libarchive
 
           tar \
@@ -259,26 +261,12 @@ jobs:
           test -f third_party/libarchive/CMakeLists.txt
 
           echo "===== libarchive version ====="
-
-          cat \
-            third_party/libarchive/build/version
+          cat third_party/libarchive/build/version
 
 
-      # ==========================================================
-      # Create one explicit iOS CMake toolchain
-      #
-      # IMPORTANT:
-      #
-      # We intentionally DO NOT use:
-      #
-      #   -G Xcode
-      #   -G Ninja
-      #
-      # Only Unix Makefiles.
-      #
-      # Therefore CMake never creates an Xcode project and never
-      # creates ProcessInfoPlistFile / .app targets.
-      # ==========================================================
+      # ============================================================
+      # Create iOS CMake toolchain
+      # ============================================================
 
       - name: Create iOS CMake toolchain
         shell: bash
@@ -289,21 +277,16 @@ jobs:
 
           cat > build/toolchain/ios-arm64.cmake <<EOF
           set(CMAKE_SYSTEM_NAME iOS)
-
           set(CMAKE_SYSTEM_PROCESSOR arm64)
 
           set(CMAKE_OSX_SYSROOT "${IOS_SDK_DIR}" CACHE PATH "" FORCE)
-
           set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
-
           set(CMAKE_OSX_DEPLOYMENT_TARGET "${IOS_DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
 
           set(CMAKE_C_COMPILER "${IOS_CLANG}" CACHE FILEPATH "" FORCE)
-
           set(CMAKE_CXX_COMPILER "${IOS_CLANGXX}" CACHE FILEPATH "" FORCE)
 
           set(CMAKE_AR "${IOS_AR}" CACHE FILEPATH "" FORCE)
-
           set(CMAKE_RANLIB "${IOS_RANLIB}" CACHE FILEPATH "" FORCE)
 
           set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
@@ -328,9 +311,7 @@ jobs:
               "-target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} -isysroot ${IOS_SDK_DIR}"
           )
 
-          set(CMAKE_FIND_ROOT_PATH
-              "${IOS_SDK_DIR}"
-          )
+          set(CMAKE_FIND_ROOT_PATH "${IOS_SDK_DIR}")
 
           set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
           set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
@@ -338,8 +319,27 @@ jobs:
           set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
           EOF
 
+          echo "===== iOS CMake toolchain ====="
           cat build/toolchain/ios-arm64.cmake
-       - name: Configure libarchive
+
+
+      # ============================================================
+      # Configure libarchive
+      #
+      # Important:
+      #
+      # iOS does not provide futimesat().
+      #
+      # libarchive uses:
+      #
+      #     #if defined(HAVE_FUTIMESAT)
+      #
+      # therefore HAVE_FUTIMESAT must NOT be defined.
+      #
+      # We remove the generated definition after CMake detection.
+      # ============================================================
+
+      - name: Configure libarchive
         shell: bash
         run: |
           set -euo pipefail
@@ -384,36 +384,57 @@ jobs:
 
           test -f build/libarchive/CMakeCache.txt
 
-          echo "===== libarchive detected futimesat ====="
-          grep -R "HAVE_FUTIMESAT" \
+          echo "===== libarchive futimesat detection ====="
+
+          grep -R \
+            "HAVE_FUTIMESAT" \
             build/libarchive \
             --include='*.h' \
             --include='CMakeCache.txt' \
             || true
 
-          # iOS does not provide futimesat().
-          # libarchive uses #if defined(HAVE_FUTIMESAT), so the
-          # macro must be removed rather than defined as 0.
+          # ----------------------------------------------------------
+          # iOS does NOT provide futimesat().
+          #
+          # libarchive checks with:
+          #
+          #   #if defined(HAVE_FUTIMESAT)
+          #
+          # Therefore defining it as 0 is NOT sufficient.
+          #
+          # Remove the generated #define completely.
+          # ----------------------------------------------------------
+
           while IFS= read -r -d '' f; do
-            sed -i '' '/^[[:space:]]*#define[[:space:]]\+HAVE_FUTIMESAT[[:space:]]/d' "$f"
+            sed -i '' \
+              '/^[[:space:]]*#define[[:space:]]\+HAVE_FUTIMESAT[[:space:]]/d' \
+              "$f"
           done < <(
             find build/libarchive \
               -type f \
-              \( -name 'archive_platform.h' -o -name 'config.h' \) \
+              \( \
+                -name 'archive_platform.h' \
+                -o -name 'config.h' \
+              \) \
               -print0
           )
 
-          echo "===== libarchive HAVE_FUTIMESAT after fix ====="
-          if grep -R "HAVE_FUTIMESAT" \
+          echo "===== libarchive futimesat after fix ====="
+
+          if grep -R \
+              "HAVE_FUTIMESAT" \
               build/libarchive \
               --include='*.h' \
-              --include='CMakeCache.txt'; then
+              --include='CMakeCache.txt'
+          then
             echo "ERROR: HAVE_FUTIMESAT is still defined"
             exit 1
           fi
 
-      # ==========================================================
-      # Download / build libarchive
+
+      # ============================================================
+      # Build libarchive
+      # ============================================================
 
       - name: Build libarchive
         shell: bash
@@ -436,16 +457,15 @@ jobs:
           test -n "${LIBARCHIVE}"
           test -f "${LIBARCHIVE}"
 
-          echo "LIBARCHIVE=${GITHUB_WORKSPACE}/${LIBARCHIVE}" \
-            >> "${GITHUB_ENV}"
+          echo "LIBARCHIVE=${GITHUB_WORKSPACE}/${LIBARCHIVE}" >> "${GITHUB_ENV}"
 
           echo "===== libarchive ====="
           file "${LIBARCHIVE}"
 
 
-      # ==========================================================
+      # ============================================================
       # Download curl
-      # ==========================================================
+      # ============================================================
 
       - name: Download curl
         shell: bash
@@ -453,7 +473,6 @@ jobs:
           set -euo pipefail
 
           rm -rf third_party/curl
-
           mkdir -p third_party/curl
 
           curl \
@@ -476,19 +495,13 @@ jobs:
           test -f third_party/curl/CMakeLists.txt
 
 
-      # ==========================================================
+      # ============================================================
       # Configure curl
       #
-      # NTLM explicitly OFF.
-      #
-      # This fixes:
-      #
-      #   cannot compile NTLM support without a crypto library
-      #   with DES
-      #
-      # because your bundled OpenSSL doesn't provide the DES
-      # capability curl's NTLM implementation requires.
-      # ==========================================================
+      # NTLM is disabled because curl's NTLM implementation requires
+      # DES support, which is not available in the bundled OpenSSL
+      # configuration used for this iOS build.
+      # ============================================================
 
       - name: Configure curl
         shell: bash
@@ -539,7 +552,6 @@ jobs:
             -DCURL_DISABLE_TFTP=ON \
             -DCURL_DISABLE_MQTT=ON \
             -DCURL_DISABLE_SRP=ON \
-            -DCURL_DISABLE_WEBSOCKETS=OFF \
             -DCURL_DISABLE_BROTLI=ON \
             -DCURL_DISABLE_ZSTD=ON \
             -DCURL_DISABLE_LIBPSL=ON \
@@ -555,6 +567,13 @@ jobs:
             -DCURL_CA_BUNDLE=none \
             -DCURL_CA_PATH=none \
             -DCURL_CA_FALLBACK=ON
+
+          test -f build/curl/CMakeCache.txt
+
+
+      # ============================================================
+      # Build curl
+      # ============================================================
 
       - name: Build curl
         shell: bash
@@ -577,16 +596,15 @@ jobs:
           test -n "${CURL_LIB}"
           test -f "${CURL_LIB}"
 
-          echo "CURL=${GITHUB_WORKSPACE}/${CURL_LIB}" \
-            >> "${GITHUB_ENV}"
+          echo "CURL=${GITHUB_WORKSPACE}/${CURL_LIB}" >> "${GITHUB_ENV}"
 
           echo "===== libcurl ====="
           file "${CURL_LIB}"
 
 
-      # ==========================================================
-      # Validate dependencies
-      # ==========================================================
+      # ============================================================
+      # Validate all static libraries
+      # ============================================================
 
       - name: Validate dependency architectures
         shell: bash
@@ -599,13 +617,13 @@ jobs:
           test -f "${LIBARCHIVE}"
           test -f "${CURL}"
 
-          echo "===== crypto ====="
+          echo "===== OpenSSL crypto ====="
           file "${CRYPTO}"
 
-          echo "===== ssl ====="
+          echo "===== OpenSSL ssl ====="
           file "${SSL}"
 
-          echo "===== plist ====="
+          echo "===== libplist ====="
           file "${PLIST}"
 
           echo "===== libarchive ====="
@@ -615,9 +633,9 @@ jobs:
           file "${CURL}"
 
 
-      # ==========================================================
+      # ============================================================
       # Build ldid
-      # ==========================================================
+      # ============================================================
 
       - name: Build ldid
         shell: bash
@@ -625,7 +643,6 @@ jobs:
           set -euo pipefail
 
           rm -rf build/ldid
-
           mkdir -p build/ldid
 
           IOS_TARGET="arm64-apple-ios${IOS_DEPLOYMENT_TARGET}"
@@ -668,9 +685,12 @@ jobs:
           test -s build/ldid/ldid
 
 
-      # ==========================================================
+      # ============================================================
       # Validate final Mach-O
-      # ==========================================================
+      #
+      # Do NOT execute it:
+      # it is an iPhoneOS arm64 binary and the runner is macOS.
+      # ============================================================
 
       - name: Validate final binary
         shell: bash
@@ -678,68 +698,50 @@ jobs:
           set -euo pipefail
 
           echo "===== file ====="
-
           file build/ldid/ldid
 
           echo "===== architecture ====="
-
           lipo -info build/ldid/ldid
 
-          echo "===== Mach-O ====="
-
-          otool \
-            -hv \
-            build/ldid/ldid
+          echo "===== Mach-O header ====="
+          otool -hv build/ldid/ldid
 
           echo "===== build version ====="
-
-          otool \
-            -l \
-            build/ldid/ldid \
-            | grep -A5 LC_BUILD_VERSION
+          otool -l build/ldid/ldid | grep -A5 LC_BUILD_VERSION
 
           echo "===== linked libraries ====="
-
-          otool \
-            -L \
-            build/ldid/ldid
+          otool -L build/ldid/ldid
 
 
-      # ==========================================================
-      # Run version
-      #
-      # An iOS binary cannot normally execute on the macOS runner.
-      #
-      # Therefore this is intentionally a Mach-O validation,
-      # NOT ./ldid --version.
-      # ==========================================================
+      # ============================================================
+      # Validate iOS deployment target
+      # ============================================================
 
       - name: Validate iOS deployment target
         shell: bash
         run: |
           set -euo pipefail
 
-          otool \
-            -l \
-            build/ldid/ldid \
+          otool -l build/ldid/ldid \
             > build/ldid/load-commands.txt
 
-          grep \
-            -A5 \
+          echo "===== LC_BUILD_VERSION ====="
+
+          grep -A5 \
             LC_BUILD_VERSION \
             build/ldid/load-commands.txt
 
-          grep \
-            -A5 \
+          echo "===== platform check ====="
+
+          grep -A5 \
             LC_BUILD_VERSION \
             build/ldid/load-commands.txt \
-            | grep \
-              "platform 2"
+            | grep "platform 2"
 
 
-      # ==========================================================
-      # Strip
-      # ==========================================================
+      # ============================================================
+      # Strip final binary
+      # ============================================================
 
       - name: Strip final binary
         shell: bash
@@ -764,9 +766,9 @@ jobs:
           lipo -info build/ldid/ldid
 
 
-      # ==========================================================
+      # ============================================================
       # Package
-      # ==========================================================
+      # ============================================================
 
       - name: Package iOS artifact
         shell: bash
@@ -774,7 +776,6 @@ jobs:
           set -euo pipefail
 
           rm -rf dist
-
           mkdir -p dist
 
           cp \
@@ -800,13 +801,15 @@ jobs:
             ldid-ios-arm64.tar.gz \
             ldid-ios-arm64.tar.gz.sha256
 
+          echo "===== SHA256 ====="
+
           cat \
             ldid-ios-arm64.tar.gz.sha256
 
 
-      # ==========================================================
-      # Upload ONLY final iOS artifact
-      # ==========================================================
+      # ============================================================
+      # Upload final iOS artifact
+      # ============================================================
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
