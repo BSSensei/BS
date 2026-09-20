@@ -18,13 +18,12 @@ permissions:
 
 env:
   IOS_DEPLOYMENT_TARGET: "16.0"
-
   IOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
 
   LIBARCHIVE_REPO: "https://github.com/okferret/libarchive.git"
 
+  CURL_REPO: "https://github.com/XDcobra/libcurl-ios-prebuilt-and-buildscripts.git"
   CURL_VERSION: "8.17.0"
-  CURL_RELEASE_TAG: "curl-8_17_0"
 
 jobs:
   build-ios:
@@ -44,9 +43,6 @@ jobs:
 
           unzip -q ldid.zip -d source
 
-          echo "===== SOURCE ====="
-          find source -maxdepth 2 -print | sort
-
       - name: Install build tools
         shell: bash
         run: |
@@ -57,6 +53,8 @@ jobs:
             automake \
             libtool \
             pkg-config \
+            cmake \
+            ninja \
             xz
 
       - name: Download iPhoneOS SDK
@@ -74,7 +72,7 @@ jobs:
             --retry-delay 2 \
             --retry-all-errors \
             --connect-timeout 30 \
-            --max-time 600 \
+            --max-time 900 \
             -o third_party/iPhoneOS16.5.sdk.tar.xz \
             "${IOS_SDK_URL}"
 
@@ -83,18 +81,15 @@ jobs:
             third_party/iPhoneOS16.5.sdk.tar.xz \
             -C third_party/sdk
 
-          SDK="$(
+          SDKROOT="$(
             find third_party/sdk \
               -type d \
-              -name 'iPhoneOS16.5.sdk' \
+              -name "iPhoneOS16.5.sdk" \
               -print \
               -quit
           )"
 
-          echo "SDK=${SDK}" >> "${GITHUB_ENV}"
-          echo "SDKROOT=${SDK}" >> "${GITHUB_ENV}"
-
-          echo "SDKROOT=${SDK}"
+          echo "SDKROOT=${SDKROOT}" >> "${GITHUB_ENV}"
 
       - name: Locate bundled OpenSSL
         shell: bash
@@ -108,7 +103,7 @@ jobs:
             OPENSSL_LIB_DIR="$(
               find source \
                 -type d \
-                -name 'openssl_lib' \
+                -name "openssl_lib" \
                 -print \
                 -quit
             )"
@@ -118,7 +113,7 @@ jobs:
             OPENSSL_INCLUDE_DIR="$(
               find source \
                 -type d \
-                -name 'openssl_include' \
+                -name "openssl_include" \
                 -print \
                 -quit
             )"
@@ -126,9 +121,6 @@ jobs:
 
           echo "OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR}" >> "${GITHUB_ENV}"
           echo "OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}" >> "${GITHUB_ENV}"
-
-          echo "OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR}"
-          echo "OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}"
 
       - name: Locate bundled libplist
         shell: bash
@@ -142,7 +134,7 @@ jobs:
             PLIST_LIB_DIR="$(
               find source \
                 -type d \
-                -name 'libplist_lib' \
+                -name "libplist_lib" \
                 -print \
                 -quit
             )"
@@ -152,7 +144,7 @@ jobs:
             PLIST_INCLUDE_DIR="$(
               find source \
                 -type d \
-                -name 'libplist_include' \
+                -name "libplist_include" \
                 -print \
                 -quit
             )"
@@ -161,10 +153,7 @@ jobs:
           echo "PLIST_LIB_DIR=${PLIST_LIB_DIR}" >> "${GITHUB_ENV}"
           echo "PLIST_INCLUDE_DIR=${PLIST_INCLUDE_DIR}" >> "${GITHUB_ENV}"
 
-          echo "PLIST_LIB_DIR=${PLIST_LIB_DIR}"
-          echo "PLIST_INCLUDE_DIR=${PLIST_INCLUDE_DIR}"
-
-      - name: Patch macOS-only Security APIs
+      - name: Patch macOS-only Security API
         shell: bash
         run: |
           set -euo pipefail
@@ -207,7 +196,7 @@ jobs:
           LIBARCHIVE_XCFRAMEWORK="$(
             find third_party/libarchive \
               -type d \
-              -path '*/libArchive.xcframework' \
+              -path "*/libArchive.xcframework" \
               -print \
               -quit
           )"
@@ -215,7 +204,7 @@ jobs:
           LIBARCHIVE_A="$(
             find "${LIBARCHIVE_XCFRAMEWORK}" \
               -type f \
-              -path '*/ios-arm64/libarchive.a' \
+              -path "*/ios-arm64/libarchive.a" \
               -print \
               -quit
           )"
@@ -223,123 +212,116 @@ jobs:
           LIBARCHIVE_HEADERS="$(
             find "${LIBARCHIVE_XCFRAMEWORK}" \
               -type d \
-              -name Headers \
+              -name "Headers" \
               -print \
               -quit
           )"
 
-          echo "LIBARCHIVE_XCFRAMEWORK=${LIBARCHIVE_XCFRAMEWORK}" >> "${GITHUB_ENV}"
           echo "LIBARCHIVE_A=${LIBARCHIVE_A}" >> "${GITHUB_ENV}"
           echo "LIBARCHIVE_HEADERS=${LIBARCHIVE_HEADERS}" >> "${GITHUB_ENV}"
 
-          echo "LIBARCHIVE_A=${LIBARCHIVE_A}"
-          echo "LIBARCHIVE_HEADERS=${LIBARCHIVE_HEADERS}"
-
-      - name: Download libcurl without GitHub API
+      - name: Clone libcurl builder
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf third_party/curl
-          mkdir -p third_party/curl
+          rm -rf third_party/libcurl-builder
 
-          CURL_ASSET_URL="https://github.com/XDcobra/libcurl-ios-prebuilt-and-buildscripts/releases/download/${CURL_RELEASE_TAG}/libcurl.xcframework.zip"
+          git clone \
+            --depth 1 \
+            "${CURL_REPO}" \
+            third_party/libcurl-builder
 
-          curl \
-            --location \
-            --fail \
-            --retry 8 \
-            --retry-delay 2 \
-            --retry-all-errors \
-            --connect-timeout 30 \
-            --max-time 600 \
-            -o third_party/curl/libcurl.xcframework.zip \
-            "${CURL_ASSET_URL}"
+      - name: Build libcurl for iOS
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          unzip \
-            -q \
-            third_party/curl/libcurl.xcframework.zip \
-            -d third_party/curl
+          cd third_party/libcurl-builder
 
-          CURL_A="$(
-            find third_party/curl \
-              -type f \
-              -path '*/ios-arm64/libcurl.a' \
+          chmod +x scripts/build_xcframework.sh
+
+          export SDKROOT="${SDKROOT}"
+          export IPHONEOS_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET}"
+
+          ./scripts/build_xcframework.sh \
+            --disable-shared \
+            --enable-static
+
+      - name: Locate built libcurl
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CURL_XCFRAMEWORK="$(
+            find third_party/libcurl-builder \
+              -type d \
+              -name "libcurl.xcframework" \
               -print \
               -quit
           )"
 
+          CURL_A="$(
+            find "${CURL_XCFRAMEWORK}" \
+              -type f \
+              -path "*/ios-arm64/libcurl.a" \
+              -print \
+              -quit
+          )"
+
+          CURL_HEADERS="$(
+            find "${CURL_XCFRAMEWORK}" \
+              -type d \
+              -name "Headers" \
+              -print \
+              -quit
+          )"
+
+          if [ -z "${CURL_HEADERS}" ]; then
+            CURL_HEADERS="$(
+              find third_party/libcurl-builder \
+                -type d \
+                -path "*/curl/include/curl" \
+                -print \
+                -quit |
+                xargs -I{} dirname {}
+            )"
+          fi
+
+          echo "CURL_XCFRAMEWORK=${CURL_XCFRAMEWORK}" >> "${GITHUB_ENV}"
           echo "CURL_A=${CURL_A}" >> "${GITHUB_ENV}"
-
-          echo "CURL_A=${CURL_A}"
-
-      - name: Download curl headers
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf third_party/curl-source
-          mkdir -p third_party/curl-source
-
-          curl \
-            --location \
-            --fail \
-            --retry 8 \
-            --retry-delay 2 \
-            --retry-all-errors \
-            --connect-timeout 30 \
-            --max-time 600 \
-            -o third_party/curl-${CURL_VERSION}.tar.xz \
-            "https://curl.se/download/curl-${CURL_VERSION}.tar.xz"
-
-          tar \
-            -xJf \
-            third_party/curl-${CURL_VERSION}.tar.xz \
-            -C third_party/curl-source
-
-          CURL_SOURCE="third_party/curl-source/curl-${CURL_VERSION}"
-
-          echo "CURL_SOURCE=${CURL_SOURCE}" >> "${GITHUB_ENV}"
+          echo "CURL_HEADERS=${CURL_HEADERS}" >> "${GITHUB_ENV}"
 
       - name: Build ldid
         shell: bash
         run: |
           set -euo pipefail
 
-          CLANG="$(xcrun --sdk iphoneos --find clang)"
           CLANGXX="$(xcrun --sdk iphoneos --find clang++)"
 
           TARGET="arm64-apple-ios${IOS_DEPLOYMENT_TARGET}"
 
           mkdir -p build
 
-          COMMON_FLAGS=(
-            -target "${TARGET}"
-            -isysroot "${SDKROOT}"
-            "-miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}"
-
-            -O3
-            -DNDEBUG
-
-            -flto=thin
-            -ffunction-sections
-            -fdata-sections
-            -fvisibility=hidden
-            -fstrict-aliasing
-
-            -Wall
-            -Wextra
-            -Wpedantic
-            -Werror
-
-            "-I${OPENSSL_INCLUDE_DIR}"
-            "-I${PLIST_INCLUDE_DIR}"
-            "-I${LIBARCHIVE_HEADERS}"
-            "-I${CURL_SOURCE}/include"
-          )
-
           "${CLANGXX}" \
-            "${COMMON_FLAGS[@]}" \
+            -target "${TARGET}" \
+            -isysroot "${SDKROOT}" \
+            "-miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
+            -O3 \
+            -DNDEBUG \
+            -flto=thin \
+            -ffunction-sections \
+            -fdata-sections \
+            -fvisibility=hidden \
+            -fstrict-aliasing \
+            -Wall \
+            -Wextra \
+            -Wpedantic \
+            -Werror \
+            "-I${OPENSSL_INCLUDE_DIR}" \
+            "-I${PLIST_INCLUDE_DIR}" \
+            "-I${LIBARCHIVE_HEADERS}" \
+            "-I${CURL_HEADERS}" \
             -c \
             source/ldid.cpp \
             -o build/ldid.o
@@ -367,8 +349,6 @@ jobs:
             -lbz2 \
             -o build/ldid
 
-          chmod +x build/ldid
-
       - name: Preserve unstripped binary
         shell: bash
         run: |
@@ -378,7 +358,7 @@ jobs:
             build/ldid \
             build/ldid.unstripped
 
-      - name: Strip binary
+      - name: Strip
         shell: bash
         run: |
           set -euo pipefail
@@ -408,7 +388,7 @@ jobs:
             ldid.cpp \
             ldid.hpp
 
-      - name: Package binaries
+      - name: Package release
         shell: bash
         run: |
           set -euo pipefail
