@@ -45,7 +45,7 @@ jobs:
 
 
       # ============================================================
-      # Extract bundled ldid source and libraries
+      # Extract ldid
       # ============================================================
 
       - name: Extract ldid
@@ -190,8 +190,8 @@ jobs:
           CRYPTO="$(cd "$(dirname "${CRYPTO}")" && pwd)/$(basename "${CRYPTO}")"
           SSL="$(cd "$(dirname "${SSL}")" && pwd)/$(basename "${SSL}")"
 
-          echo "CRYPTO=${GITHUB_WORKSPACE}/${CRYPTO#${GITHUB_WORKSPACE}/}" >> "${GITHUB_ENV}"
-          echo "SSL=${GITHUB_WORKSPACE}/${SSL#${GITHUB_WORKSPACE}/}" >> "${GITHUB_ENV}"
+          echo "CRYPTO=${CRYPTO}" >> "${GITHUB_ENV}"
+          echo "SSL=${SSL}" >> "${GITHUB_ENV}"
 
           echo "===== OPENSSL ====="
           echo "CRYPTO=${CRYPTO}"
@@ -223,31 +223,22 @@ jobs:
 
           PLIST="$(cd "$(dirname "${PLIST}")" && pwd)/$(basename "${PLIST}")"
 
-          echo "PLIST=${GITHUB_WORKSPACE}/${PLIST#${GITHUB_WORKSPACE}/}" >> "${GITHUB_ENV}"
+          echo "PLIST=${PLIST}" >> "${GITHUB_ENV}"
 
           echo "===== LIBPLIST ====="
           echo "PLIST=${PLIST}"
 
 
       # ============================================================
-      # IMPORTANT:
-      # iOS does not provide macOS SecStaticCode* APIs.
+      # Fix iOS/macOS Security.framework API usage
       #
-      # __APPLE__ is also defined on iOS, therefore the old:
+      # SecStaticCodeRef and related APIs are macOS-only.
       #
-      #   #ifdef __APPLE__
-      #
-      # was incorrect.
-      #
-      # This step changes it to:
-      #
-      #   #if defined(__APPLE__) && TARGET_OS_OSX
-      #
-      # so Apple system-code-validation remains available on macOS,
-      # but is not compiled into the iOS target.
+      # __APPLE__ is true on both macOS and iOS, therefore we must
+      # additionally check TARGET_OS_OSX.
       # ============================================================
 
-      - name: Patch ldid for iOS Security APIs
+      - name: Patch ldid for iOS
         shell: bash
         run: |
           set -e
@@ -259,7 +250,21 @@ jobs:
           s = p.read_text()
 
           # --------------------------------------------------------
-          # Security/CoreFoundation includes
+          # Add TargetConditionals.h before macOS-only Security APIs.
+          # --------------------------------------------------------
+
+          security_include = """#include <Security/Security.h>"""
+          target_include = """#include <TargetConditionals.h>"""
+
+          if security_include in s and target_include not in s:
+              s = s.replace(
+                  security_include,
+                  target_include + "\n" + security_include,
+                  1
+              )
+
+          # --------------------------------------------------------
+          # Protect Security/CoreFoundation includes.
           # --------------------------------------------------------
 
           old = """#ifdef __APPLE__
@@ -278,106 +283,75 @@ jobs:
           if old in s:
               s = s.replace(old, new, 1)
 
-          # Handle variants with no indentation.
-          old = """#ifdef __APPLE__
-          #include <Security/Security.h>
-          #include <CoreFoundation/CoreFoundation.h>
-          #endif"""
-
-          new = """#if defined(__APPLE__)
-          #include <TargetConditionals.h>
-          #if TARGET_OS_OSX
-          #include <Security/Security.h>
-          #include <CoreFoundation/CoreFoundation.h>
-          #endif
-          #endif"""
-
-          if old in s:
-              s = s.replace(old, new, 1)
-
           # --------------------------------------------------------
-          # macOS SecStaticCode implementation
+          # Protect verify_with_apple_system().
           # --------------------------------------------------------
 
-          marker = "#ifdef __APPLE__\ninline bool verify_with_apple_system"
-
-          if marker in s:
-              s = s.replace(
-                  marker,
-                  "#if defined(__APPLE__) && TARGET_OS_OSX\n"
-                  "inline bool verify_with_apple_system",
-                  1
-              )
-
-          marker = "#ifdef __APPLE__\r\ninline bool verify_with_apple_system"
-
-          if marker in s:
-              s = s.replace(
-                  marker,
-                  "#if defined(__APPLE__) && TARGET_OS_OSX\r\n"
-                  "inline bool verify_with_apple_system",
-                  1
-              )
-
-          # --------------------------------------------------------
-          # verify_with_system_impl
-          # --------------------------------------------------------
-
-          marker = (
-              "inline VerificationResult verify_with_system_impl("
-              "const std::filesystem::path& path) {\n"
-              "#ifdef __APPLE__"
+          s = s.replace(
+              "#ifdef __APPLE__\ninline bool verify_with_apple_system",
+              "#if defined(__APPLE__) && TARGET_OS_OSX\n"
+              "inline bool verify_with_apple_system",
+              1
           )
 
-          if marker in s:
-              s = s.replace(
-                  marker,
-                  (
-                      "inline VerificationResult verify_with_system_impl("
-                      "const std::filesystem::path& path) {\n"
-                      "#if defined(__APPLE__) && TARGET_OS_OSX"
-                  ),
-                  1
-              )
-
-          marker = (
-              "inline VerificationResult verify_with_system_impl("
-              "const std::filesystem::path& path) {\r\n"
-              "#ifdef __APPLE__"
+          s = s.replace(
+              "#ifdef __APPLE__\r\ninline bool verify_with_apple_system",
+              "#if defined(__APPLE__) && TARGET_OS_OSX\r\n"
+              "inline bool verify_with_apple_system",
+              1
           )
 
-          if marker in s:
-              s = s.replace(
-                  marker,
-                  (
-                      "inline VerificationResult verify_with_system_impl("
-                      "const std::filesystem::path& path) {\r\n"
-                      "#if defined(__APPLE__) && TARGET_OS_OSX"
-                  ),
-                  1
-              )
+          # --------------------------------------------------------
+          # Protect verify_with_system_impl() Apple branch.
+          # --------------------------------------------------------
+
+          s = s.replace(
+              (
+                  "inline VerificationResult verify_with_system_impl("
+                  "const std::filesystem::path& path) {\n"
+                  "#ifdef __APPLE__"
+              ),
+              (
+                  "inline VerificationResult verify_with_system_impl("
+                  "const std::filesystem::path& path) {\n"
+                  "#if defined(__APPLE__) && TARGET_OS_OSX"
+              ),
+              1
+          )
+
+          s = s.replace(
+              (
+                  "inline VerificationResult verify_with_system_impl("
+                  "const std::filesystem::path& path) {\r\n"
+                  "#ifdef __APPLE__"
+              ),
+              (
+                  "inline VerificationResult verify_with_system_impl("
+                  "const std::filesystem::path& path) {\r\n"
+                  "#if defined(__APPLE__) && TARGET_OS_OSX"
+              ),
+              1
+          )
 
           # --------------------------------------------------------
-          # Verify expected guards were actually applied.
+          # Safety validation.
           # --------------------------------------------------------
 
           if "SecStaticCodeRef" in s:
               if "TARGET_OS_OSX" not in s:
                   raise SystemExit(
-                      "ERROR: SecStaticCodeRef exists but TARGET_OS_OSX "
-                      "guard was not inserted."
+                      "ERROR: SecStaticCodeRef exists but "
+                      "TARGET_OS_OSX guard was not installed."
                   )
 
           p.write_text(s)
           PY
 
-          echo "===== SECURITY GUARDS ====="
+          echo "===== SECURITY API CHECK ====="
 
           grep -n -E \
             'TargetConditionals|Security/Security|TARGET_OS_OSX|SecStaticCode|verify_with_system_impl' \
             source/ldid.cpp
-
-          echo "===== SOURCE CHECK ====="
 
           test -f source/ldid.cpp
           test -f source/ldid.hpp
@@ -404,7 +378,7 @@ jobs:
 
 
       # ============================================================
-      # Locate prebuilt libarchive iOS arm64 slice
+      # Locate libarchive iOS arm64
       # ============================================================
 
       - name: Locate libarchive
@@ -432,16 +406,15 @@ jobs:
 
           if [ -z "${XCFRAMEWORK}" ]; then
             echo "ERROR: libarchive XCFramework not found."
-            find third_party/libarchive -maxdepth 5 -print
+            find third_party/libarchive -maxdepth 6 -print
             exit 1
           fi
 
           SLICE="${XCFRAMEWORK}/ios-arm64"
 
           if [ ! -d "${SLICE}" ]; then
-            echo "ERROR: iOS arm64 libarchive slice not found:"
-            echo "${SLICE}"
-            find "${XCFRAMEWORK}" -maxdepth 3 -print
+            echo "ERROR: iOS arm64 libarchive slice not found."
+            find "${XCFRAMEWORK}" -maxdepth 4 -print
             exit 1
           fi
 
@@ -468,16 +441,16 @@ jobs:
           )"
 
           if [ -z "${HEADERS}" ]; then
-            echo "ERROR: libarchive Headers directory not found."
-            find "${SLICE}" -maxdepth 4 -print
+            echo "ERROR: libarchive Headers not found."
+            find "${SLICE}" -maxdepth 5 -print
             exit 1
           fi
 
           LIBARCHIVE="$(cd "$(dirname "${LIBARCHIVE}")" && pwd)/$(basename "${LIBARCHIVE}")"
           HEADERS="$(cd "${HEADERS}" && pwd)"
 
-          echo "LIBARCHIVE=${GITHUB_WORKSPACE}/${LIBARCHIVE#${GITHUB_WORKSPACE}/}" >> "${GITHUB_ENV}"
-          echo "LIBARCHIVE_HEADERS=${GITHUB_WORKSPACE}/${HEADERS#${GITHUB_WORKSPACE}/}" >> "${GITHUB_ENV}"
+          echo "LIBARCHIVE=${LIBARCHIVE}" >> "${GITHUB_ENV}"
+          echo "LIBARCHIVE_HEADERS=${HEADERS}" >> "${GITHUB_ENV}"
 
           echo "===== LIBARCHIVE ====="
           echo "LIBARCHIVE=${LIBARCHIVE}"
@@ -485,7 +458,7 @@ jobs:
 
 
       # ============================================================
-      # Validate libarchive
+      # Validate libarchive and inspect unresolved dependencies
       # ============================================================
 
       - name: Validate libarchive
@@ -500,14 +473,23 @@ jobs:
 
           lipo -info "${LIBARCHIVE}" || true
 
+          echo "===== LIBARCHIVE SYMBOLS ====="
+
           nm -gU "${LIBARCHIVE}" 2>/dev/null |
             grep -E \
               "archive_read_new|archive_read_open|archive_write_new|archive_write_open" |
             head -20 || true
 
+          echo "===== EXPECTED SYSTEM DEPENDENCIES ====="
+
+          nm -gU "${LIBARCHIVE}" 2>/dev/null |
+            grep -E \
+              "_iconv_|_xml|_bz2|_zlib|_lzma|_ZSTD|_LZ4" |
+            head -80 || true
+
 
       # ============================================================
-      # Download prebuilt libcurl release
+      # Download prebuilt libcurl
       # ============================================================
 
       - name: Download libcurl
@@ -542,7 +524,7 @@ jobs:
 
 
       # ============================================================
-      # Extract libcurl release
+      # Extract libcurl
       # ============================================================
 
       - name: Extract libcurl
@@ -586,32 +568,21 @@ jobs:
           )
 
           if [ "${FOUND}" -eq 0 ]; then
-            echo "ERROR: no supported libcurl release archive found."
-
-            find third_party/curl/download -maxdepth 3 -print
-
+            echo "ERROR: no supported libcurl archive found."
+            find third_party/curl/download -maxdepth 4 -print
             exit 1
           fi
 
-          echo "===== EXTRACTED CURL ====="
+          echo "===== CURL FILES ====="
 
           find \
             third_party/curl/extracted \
-            -maxdepth 6 \
+            -maxdepth 8 \
             -print
 
 
       # ============================================================
-      # Locate actual libcurl binary
-      #
-      # Current release layout:
-      #
-      # extracted/
-      # ├── ios-arm64/
-      # │   └── libcurl.a
-      # └── Info.plist
-      #
-      # There are NO curl headers in this release.
+      # Locate prebuilt libcurl
       # ============================================================
 
       - name: Locate libcurl
@@ -638,18 +609,14 @@ jobs:
           fi
 
           if [ -z "${CURL}" ]; then
-            echo "ERROR: prebuilt libcurl.a not found."
-
-            find third_party/curl/extracted -maxdepth 8 -print
-
+            echo "ERROR: libcurl.a not found."
+            find third_party/curl/extracted -maxdepth 10 -print
             exit 1
           fi
 
-          test -f "${CURL}"
-
           CURL="$(cd "$(dirname "${CURL}")" && pwd)/$(basename "${CURL}")"
 
-          echo "CURL=${GITHUB_WORKSPACE}/${CURL#${GITHUB_WORKSPACE}/}" >> "${GITHUB_ENV}"
+          echo "CURL=${CURL}" >> "${GITHUB_ENV}"
 
           echo "===== LIBCURL ====="
           echo "CURL=${CURL}"
@@ -659,9 +626,7 @@ jobs:
 
 
       # ============================================================
-      # Download curl 8.17.0 source ONLY for headers.
-      #
-      # libcurl itself is NOT compiled here.
+      # Download curl source ONLY for matching headers
       # ============================================================
 
       - name: Download curl 8.17.0 headers
@@ -701,18 +666,11 @@ jobs:
 
           if [ -z "${CURL_SOURCE_DIR}" ]; then
             echo "ERROR: curl source directory not found."
-
-            find third_party/curl-headers -maxdepth 2 -print
-
+            find third_party/curl-headers -maxdepth 3 -print
             exit 1
           fi
 
           CURL_HEADERS="${CURL_SOURCE_DIR}/include"
-
-          if [ ! -d "${CURL_HEADERS}" ]; then
-            echo "ERROR: curl include directory not found."
-            exit 1
-          fi
 
           if [ ! -f "${CURL_HEADERS}/curl/curl.h" ]; then
             echo "ERROR: curl/curl.h not found."
@@ -721,7 +679,7 @@ jobs:
 
           CURL_HEADERS="$(cd "${CURL_HEADERS}" && pwd)"
 
-          echo "CURL_HEADERS=${GITHUB_WORKSPACE}/${CURL_HEADERS#${GITHUB_WORKSPACE}/}" >> "${GITHUB_ENV}"
+          echo "CURL_HEADERS=${CURL_HEADERS}" >> "${GITHUB_ENV}"
 
           echo "===== CURL HEADERS ====="
           echo "${CURL_HEADERS}"
@@ -741,7 +699,6 @@ jobs:
           test -f "${CURL_HEADERS}/curl/curl.h"
 
           file "${CURL}"
-
           lipo -info "${CURL}" || true
 
           nm -gU "${CURL}" 2>/dev/null |
@@ -751,7 +708,7 @@ jobs:
 
 
       # ============================================================
-      # Build iOS arm64 ldid
+      # Build iOS arm64
       # ============================================================
 
       - name: Build ldid
@@ -800,6 +757,10 @@ jobs:
             "${CRYPTO}" \
             -framework Security \
             -framework CoreFoundation \
+            -framework SystemConfiguration \
+            -framework CFNetwork \
+            -liconv \
+            -lxml2 \
             -lc++ \
             -lz \
             -lbz2 \
@@ -810,11 +771,10 @@ jobs:
           test -s build/ldid
 
           echo "===== BUILD SUCCESS ====="
-          file build/ldid
 
 
       # ============================================================
-      # Validate Mach-O
+      # Validate final Mach-O
       # ============================================================
 
       - name: Validate binary
@@ -827,13 +787,14 @@ jobs:
           echo "===== FILE ====="
           file build/ldid
 
-          echo "===== ARCH ====="
+          echo "===== ARCHITECTURE ====="
           lipo -info build/ldid
 
           echo "===== MACH-O HEADER ====="
           otool -hv build/ldid
 
           echo "===== LOAD COMMANDS ====="
+
           otool -l build/ldid > build/load_commands.txt
 
           awk '
@@ -848,12 +809,13 @@ jobs:
             }
           ' build/load_commands.txt
 
-          echo "===== DEPENDENCIES ====="
+          echo "===== LINKED LIBRARIES ====="
+
           otool -L build/ldid
 
 
       # ============================================================
-      # Strip iOS binary
+      # Strip
       # ============================================================
 
       - name: Strip binary
@@ -861,7 +823,9 @@ jobs:
         run: |
           set -e
 
-          cp build/ldid build/ldid.unstripped
+          cp \
+            build/ldid \
+            build/ldid.unstripped
 
           "${IOS_STRIP}" \
             -S \
@@ -870,17 +834,14 @@ jobs:
 
           test -s build/ldid
 
-          echo "===== STRIPPED BINARY ====="
+          echo "===== STRIPPED ====="
 
           file build/ldid
           lipo -info build/ldid
 
 
       # ============================================================
-      # Prepare corrected source package
-      #
-      # This contains the ACTUAL source after the iOS Security API
-      # fix, so the uploaded source matches the binary.
+      # Package corrected source
       # ============================================================
 
       - name: Package corrected source
@@ -889,10 +850,16 @@ jobs:
           set -e
 
           rm -rf dist
+
           mkdir -p dist/source
 
-          cp source/ldid.cpp dist/source/ldid.cpp
-          cp source/ldid.hpp dist/source/ldid.hpp
+          cp \
+            source/ldid.cpp \
+            dist/source/ldid.cpp
+
+          cp \
+            source/ldid.hpp \
+            dist/source/ldid.hpp
 
           test -f dist/source/ldid.cpp
           test -f dist/source/ldid.hpp
@@ -920,7 +887,7 @@ jobs:
 
 
       # ============================================================
-      # Package final iOS ldid
+      # Package final iOS binary
       # ============================================================
 
       - name: Package iOS ldid
@@ -962,13 +929,7 @@ jobs:
 
 
       # ============================================================
-      # Upload:
-      #
-      # 1. iOS arm64 ldid
-      # 2. SHA256
-      # 3. corrected source
-      # 4. corrected source SHA256
-      # 5. unstripped binary for debugging
+      # Upload all final artifacts
       # ============================================================
 
       - name: Upload iOS artifacts
