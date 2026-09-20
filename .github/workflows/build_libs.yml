@@ -198,68 +198,106 @@ jobs:
 
           mv libarchive-3.8.2 third_party/libarchive-src
 
-          test -x third_party/libarchive-src/configure
+          test -f third_party/libarchive-src/CMakeLists.txt
 
       # --------------------------------------------------------
-      # Build libarchive (autotools)
+      # Build libarchive (CMake)
       #
-      # libarchive's configure runs several AC_RUN_IFELSE tests
-      # (undeclared builtins, etc.) which cannot run under iOS
-      # cross-compilation. Pre-seed the cache to skip them.
+      # We use CMake here on purpose: libarchive's autotools
+      # configure runs AC_CHECK_SIZEOF / AC_RUN_IFELSE tests
+      # which cannot run under iOS cross-compilation without a
+      # fully pre-seeded config.cache. CMake handles cross
+      # compiles much better.
+      #
+      # The only iOS-specific override needed is disabling
+      # HAVE_FUTIMESAT, which is detected on macOS but is not
+      # available on iOS.
       # --------------------------------------------------------
 
-      - name: Configure and build libarchive
+      - name: Configure libarchive
         run: |
           set -euo pipefail
 
-          cd third_party/libarchive-src
+          rm -rf \
+            third_party/libarchive-build \
+            third_party/libarchive-install
 
-          export CC="${IOS_CLANG}"
-          export CXX="${IOS_CLANGXX}"
-          export AR="${IOS_AR}"
-          export RANLIB="${IOS_RANLIB}"
-          export CFLAGS="${IOS_CFLAGS}"
-          export CXXFLAGS="${IOS_CFLAGS}"
-          export LDFLAGS="${IOS_LDFLAGS}"
+          mkdir -p \
+            third_party/libarchive-build \
+            third_party/libarchive-install
 
-          PREFIX="${GITHUB_WORKSPACE}/third_party/libarchive-install"
-          rm -rf "${PREFIX}"
-          mkdir -p "${PREFIX}"
+          cmake \
+            -S third_party/libarchive-src \
+            -B third_party/libarchive-build \
+            -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT="${IOS_SDK_DIR}" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="${IOS_CLANG}" \
+            -DCMAKE_CXX_COMPILER="${IOS_CLANGXX}" \
+            -DCMAKE_AR="${IOS_AR}" \
+            -DCMAKE_RANLIB="${IOS_RANLIB}" \
+            -DCMAKE_C_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing -DHAVE_FUTIMESAT=0 -DHAVE_FUTIMENS=0 -DHAVE_UTIMENSAT=0 -DHAVE_LUTIMES=0" \
+            -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG -flto=thin -ffunction-sections -fdata-sections -fvisibility=hidden -fstrict-aliasing -DHAVE_FUTIMESAT=0 -DHAVE_FUTIMENS=0 -DHAVE_UTIMENSAT=0 -DHAVE_LUTIMES=0" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DENABLE_INSTALL=OFF \
+            -DENABLE_TEST=OFF \
+            -DENABLE_TAR=OFF \
+            -DENABLE_CPIO=OFF \
+            -DENABLE_CAT=OFF \
+            -DENABLE_UNZIP=OFF \
+            -DENABLE_XATTR=OFF \
+            -DENABLE_ACL=OFF \
+            -DENABLE_ICONV=OFF \
+            -DENABLE_CNG=OFF \
+            -DENABLE_OPENSSL=OFF \
+            -DENABLE_MBEDTLS=OFF \
+            -DENABLE_NETTLE=OFF \
+            -DENABLE_LZ4=OFF \
+            -DENABLE_LZO=OFF \
+            -DENABLE_LZMA=OFF \
+            -DENABLE_ZSTD=OFF \
+            -DENABLE_BZip2=OFF \
+            -DENABLE_LIBXML2=OFF \
+            -DENABLE_EXPAT=OFF \
+            -DENABLE_PCREPOSIX=OFF \
+            -DENABLE_PCRE2POSIX=OFF
 
-          ac_cv_c_undeclared_builtin_options=none \
-          ac_cv_have_working_undeclared_builtins=no \
-          ac_cv_func_futimesat=no \
-          ac_cv_func_futimens=no \
-          ac_cv_func_utimensat=no \
-          ac_cv_func_lutimes=no \
-          ./configure \
-            --host=arm-apple-darwin \
-            --prefix="${PREFIX}" \
-            --disable-shared \
-            --enable-static \
-            --disable-bsdtar \
-            --disable-bsdcpio \
-            --disable-bsdcat \
-            --disable-bsdunzip \
-            --without-openssl \
-            --without-xml2 \
-            --without-expat \
-            --without-lz4 \
-            --without-lzo2 \
-            --without-lzma \
-            --without-zstd \
-            --without-bz2lib \
-            --without-iconv \
-            --without-acl \
-            --without-xattr
+      - name: Build libarchive
+        run: |
+          set -euo pipefail
 
-          make -j"$(sysctl -n hw.ncpu)"
-          make install
+          cmake \
+            --build third_party/libarchive-build \
+            --parallel \
+            --verbose
 
-          test -f "${PREFIX}/lib/libarchive.a"
+      - name: Locate libarchive
+        run: |
+          set -euo pipefail
 
-          echo "===== libarchive.a ====="
-          file "${PREFIX}/lib/libarchive.a"
+          LIBARCHIVE_STATIC="$(
+            find third_party/libarchive-build \
+              -type f \
+              \( \
+                -name 'libarchive.a' \
+                -o \
+                -name 'libarchive_static.a' \
+              \) \
+              -print \
+              | head -1
+          )"
+
+          test -n "${LIBARCHIVE_STATIC}"
+          test -f "${LIBARCHIVE_STATIC}"
+
+          echo "LIBARCHIVE_STATIC=${LIBARCHIVE_STATIC}" >> "${GITHUB_ENV}"
+
+          echo "===== libarchive ====="
+          file "${LIBARCHIVE_STATIC}"
 
       # --------------------------------------------------------
       # Download curl source
@@ -318,9 +356,6 @@ jobs:
 
       # --------------------------------------------------------
       # Build curl (autotools)
-      #
-      # curl's configure also uses AC_RUN_IFELSE for a few checks.
-      # Disable / pre-seed them for iOS cross-compilation.
       # --------------------------------------------------------
 
       - name: Configure and build curl
@@ -341,15 +376,6 @@ jobs:
           rm -rf "${PREFIX}"
           mkdir -p "${PREFIX}"
 
-          ac_cv_func_futimesat=no \
-          ac_cv_func_futimens=no \
-          ac_cv_func_utimensat=no \
-          ac_cv_func_lutimes=no \
-          ac_cv_func_getpwuid_r=yes \
-          ac_cv_func_geteuid=yes \
-          ac_cv_func_gmtime_r=yes \
-          ac_cv_func_localtime_r=yes \
-          curl_cv_func_working_ares=no \
           ./configure \
             --host=arm-apple-darwin \
             --prefix="${PREFIX}" \
@@ -403,13 +429,12 @@ jobs:
           PLIST_INCLUDE="${GITHUB_WORKSPACE}/source/libplist_include"
           PLIST_LIB="${GITHUB_WORKSPACE}/source/libplist_lib"
 
-          LIBARCHIVE_A="${GITHUB_WORKSPACE}/third_party/libarchive-install/lib/libarchive.a"
           CURL_A="${GITHUB_WORKSPACE}/third_party/curl-install/lib/libcurl.a"
 
           test -f "${OPENSSL_LIB}/libcrypto.a"
           test -f "${OPENSSL_LIB}/libssl.a"
           test -f "${PLIST_LIB}/libplist-2.0.a"
-          test -f "${LIBARCHIVE_A}"
+          test -f "${LIBARCHIVE_STATIC}"
           test -f "${CURL_A}"
 
           "${IOS_CLANGXX}" \
@@ -432,7 +457,7 @@ jobs:
             -I"${OPENSSL_INCLUDE}" \
             -I"${PLIST_INCLUDE}" \
             source/ldid.cpp \
-            "${LIBARCHIVE_A}" \
+            "${LIBARCHIVE_STATIC}" \
             "${CURL_A}" \
             "${PLIST_LIB}/libplist-2.0.a" \
             "${OPENSSL_LIB}/libssl.a" \
