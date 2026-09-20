@@ -21,17 +21,18 @@ env:
 
   IOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
 
-  LIBARCHIVE_VERSION: "3.8.2"
-  LIBARCHIVE_URL: "https://www.libarchive.org/downloads/libarchive-3.8.2.tar.xz"
+  # Prebuilt Apple/iOS libarchive.
+  LIBARCHIVE_REPOSITORY: "okferret/libarchive"
 
-  CURL_VERSION: "8.16.0"
-  CURL_URL: "https://curl.se/download/curl-8.16.0.tar.xz"
+  # Prebuilt iOS/iPadOS libcurl.
+  # This project provides an OpenSSL-backed curl XCFramework.
+  CURL_REPOSITORY: "tls-inspector/curl-ios"
 
 jobs:
   ios:
     name: Build iOS arm64
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
 
@@ -53,6 +54,7 @@ jobs:
           set -euo pipefail
 
           rm -rf source
+
           mkdir -p source
 
           ditto -x -k ldid.zip source
@@ -66,8 +68,12 @@ jobs:
           test -d source/libplist_include
           test -d source/libplist_lib
 
-          echo "===== extracted source ====="
-          find source -maxdepth 2 -type f -print
+          echo "===== source ====="
+
+          find source \
+            -maxdepth 2 \
+            -type f \
+            -print
 
 
       # ============================================================
@@ -83,6 +89,7 @@ jobs:
           SDK_ROOT="${RUNNER_TEMP}/iphoneos-sdk"
 
           rm -rf "${SDK_ROOT}"
+
           mkdir -p "${SDK_ROOT}"
 
           curl \
@@ -115,10 +122,8 @@ jobs:
 
           echo "IOS_SDK_DIR=${IOS_SDK_DIR}" >> "${GITHUB_ENV}"
 
-          echo "===== SDK ====="
+          echo "===== iOS SDK ====="
           echo "${IOS_SDK_DIR}"
-
-          echo "===== SDK Settings ====="
 
           /usr/libexec/PlistBuddy \
             -c "Print:Version" \
@@ -127,7 +132,7 @@ jobs:
 
 
       # ============================================================
-      # Configure Apple Clang
+      # Apple Clang
       # ============================================================
 
       - name: Configure iOS compiler
@@ -154,9 +159,11 @@ jobs:
           echo "IOS_STRIP=${IOS_STRIP}" >> "${GITHUB_ENV}"
 
           echo "===== clang ====="
+
           "${IOS_CLANG}" --version
 
           echo "===== clang++ ====="
+
           "${IOS_CLANGXX}" --version
 
 
@@ -228,15 +235,96 @@ jobs:
 
 
       # ============================================================
-      # Download libarchive
+      # Download prebuilt libarchive XCFramework
+      #
+      # NO libarchive compilation.
       # ============================================================
 
-      - name: Download libarchive
+      - name: Download prebuilt libarchive
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p third_party
+          rm -rf third_party/libarchive
+          mkdir -p third_party/libarchive
+
+          API_URL="https://api.github.com/repos/${LIBARCHIVE_REPOSITORY}/releases/latest"
+
+          echo "===== libarchive release ====="
+          echo "${API_URL}"
+
+          RELEASE_JSON="${RUNNER_TEMP}/libarchive-release.json"
+
+          curl \
+            --fail \
+            --location \
+            --retry 8 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --max-time 120 \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -o "${RELEASE_JSON}" \
+            "${API_URL}"
+
+          test -s "${RELEASE_JSON}"
+
+          python3 - "${RELEASE_JSON}" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          assets = data.get("assets", [])
+
+          candidates = []
+
+          for asset in assets:
+              name = asset.get("name", "")
+              url = asset.get("browser_download_url", "")
+
+              lower = name.lower()
+
+              if (
+                  "xcframework" in lower
+                  and "zip" in lower
+                  and url
+              ):
+                  candidates.append((name, url))
+
+          if not candidates:
+              raise SystemExit(
+                  "No XCFramework ZIP asset found in latest libarchive release"
+              )
+
+          # Prefer an asset whose name explicitly contains libarchive.
+          candidates.sort(
+              key=lambda item: (
+                  "libarchive" not in item[0].lower(),
+                  item[0].lower(),
+              )
+          )
+
+          name, url = candidates[0]
+
+          print(f"LIBARCHIVE_ASSET_NAME={name}")
+          print(f"LIBARCHIVE_ASSET_URL={url}")
+
+          with open(
+              "${GITHUB_ENV}",
+              "a",
+              encoding="utf-8",
+          ) as env:
+              env.write(f"LIBARCHIVE_ASSET_NAME={name}\n")
+              env.write(f"LIBARCHIVE_ASSET_URL={url}\n")
+          PY
+
+          echo "===== downloading ====="
+          echo "${LIBARCHIVE_ASSET_NAME}"
+          echo "${LIBARCHIVE_ASSET_URL}"
 
           curl \
             --fail \
@@ -245,229 +333,119 @@ jobs:
             --retry-all-errors \
             --connect-timeout 30 \
             --max-time 1200 \
-            -o third_party/libarchive.tar.xz \
-            "${LIBARCHIVE_URL}"
+            -o third_party/libarchive.xcframework.zip \
+            "${LIBARCHIVE_ASSET_URL}"
 
-          test -s third_party/libarchive.tar.xz
+          test -s third_party/libarchive.xcframework.zip
 
-          rm -rf third_party/libarchive
-          mkdir -p third_party/libarchive
+          unzip \
+            -q \
+            third_party/libarchive.xcframework.zip \
+            -d third_party/libarchive
 
-          tar \
-            -xJf third_party/libarchive.tar.xz \
-            -C third_party/libarchive \
-            --strip-components=1
+          echo "===== libarchive files ====="
 
-          test -f third_party/libarchive/CMakeLists.txt
-
-          echo "===== libarchive version ====="
-          cat third_party/libarchive/build/version
+          find third_party/libarchive \
+            -maxdepth 5 \
+            -type f \
+            -print
 
 
       # ============================================================
-      # Create iOS CMake toolchain
+      # Extract iOS arm64 libarchive
       # ============================================================
 
-      - name: Create iOS CMake toolchain
+      - name: Select libarchive iOS arm64
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p build/toolchain
+          LIBARCHIVE_XCFRAMEWORK="$(
+            find third_party/libarchive \
+              -type d \
+              -name '*.xcframework' \
+              -print \
+              -quit
+          )"
 
-          cat > build/toolchain/ios-arm64.cmake <<EOF
-          set(CMAKE_SYSTEM_NAME iOS)
-          set(CMAKE_SYSTEM_PROCESSOR arm64)
+          test -n "${LIBARCHIVE_XCFRAMEWORK}"
+          test -d "${LIBARCHIVE_XCFRAMEWORK}"
 
-          set(CMAKE_OSX_SYSROOT "${IOS_SDK_DIR}" CACHE PATH "" FORCE)
-          set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
-          set(CMAKE_OSX_DEPLOYMENT_TARGET "${IOS_DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
+          LIBARCHIVE_SLICE="${LIBARCHIVE_XCFRAMEWORK}/ios-arm64"
 
-          set(CMAKE_C_COMPILER "${IOS_CLANG}" CACHE FILEPATH "" FORCE)
-          set(CMAKE_CXX_COMPILER "${IOS_CLANGXX}" CACHE FILEPATH "" FORCE)
-
-          set(CMAKE_AR "${IOS_AR}" CACHE FILEPATH "" FORCE)
-          set(CMAKE_RANLIB "${IOS_RANLIB}" CACHE FILEPATH "" FORCE)
-
-          set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-
-          set(CMAKE_C_FLAGS_INIT
-              "-target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} -isysroot ${IOS_SDK_DIR}"
-          )
-
-          set(CMAKE_CXX_FLAGS_INIT
-              "-target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} -isysroot ${IOS_SDK_DIR}"
-          )
-
-          set(CMAKE_EXE_LINKER_FLAGS_INIT
-              "-target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} -isysroot ${IOS_SDK_DIR}"
-          )
-
-          set(CMAKE_SHARED_LINKER_FLAGS_INIT
-              "-target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} -isysroot ${IOS_SDK_DIR}"
-          )
-
-          set(CMAKE_MODULE_LINKER_FLAGS_INIT
-              "-target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} -isysroot ${IOS_SDK_DIR}"
-          )
-
-          set(CMAKE_FIND_ROOT_PATH "${IOS_SDK_DIR}")
-
-          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-          EOF
-
-          echo "===== iOS CMake toolchain ====="
-          cat build/toolchain/ios-arm64.cmake
-
-
-      # ============================================================
-      # Configure libarchive
-      #
-      # Important:
-      #
-      # iOS does not provide futimesat().
-      #
-      # libarchive uses:
-      #
-      #     #if defined(HAVE_FUTIMESAT)
-      #
-      # therefore HAVE_FUTIMESAT must NOT be defined.
-      #
-      # We remove the generated definition after CMake detection.
-      # ============================================================
-
-      - name: Configure libarchive
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf build/libarchive
-
-          cmake \
-            -S third_party/libarchive \
-            -B build/libarchive \
-            -G "Unix Makefiles" \
-            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/toolchain/ios-arm64.cmake" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_INSTALL=OFF \
-            -DENABLE_TEST=OFF \
-            -DENABLE_COVERAGE=OFF \
-            -DENABLE_TAR=OFF \
-            -DENABLE_CPIO=OFF \
-            -DENABLE_CAT=OFF \
-            -DENABLE_UNZIP=OFF \
-            -DENABLE_ACL=OFF \
-            -DENABLE_XATTR=OFF \
-            -DENABLE_ICONV=OFF \
-            -DENABLE_OPENSSL=OFF \
-            -DENABLE_MBEDTLS=OFF \
-            -DENABLE_NETTLE=OFF \
-            -DENABLE_LIBB2=OFF \
-            -DENABLE_LZ4=OFF \
-            -DENABLE_LZO=OFF \
-            -DENABLE_LZMA=OFF \
-            -DENABLE_ZSTD=OFF \
-            -DENABLE_BZip2=OFF \
-            -DENABLE_LIBXML2=OFF \
-            -DENABLE_EXPAT=OFF \
-            -DENABLE_PCREPOSIX=OFF \
-            -DENABLE_PCRE2POSIX=OFF \
-            -DENABLE_CNG=OFF \
-            -DENABLE_ZLIB=ON \
-            -DZLIB_LIBRARY=/usr/lib/libz.tbd \
-            -DZLIB_INCLUDE_DIR="${IOS_SDK_DIR}/usr/include"
-
-          test -f build/libarchive/CMakeCache.txt
-
-          echo "===== libarchive futimesat detection ====="
-
-          grep -R \
-            "HAVE_FUTIMESAT" \
-            build/libarchive \
-            --include='*.h' \
-            --include='CMakeCache.txt' \
-            || true
-
-          # ----------------------------------------------------------
-          # iOS does NOT provide futimesat().
-          #
-          # libarchive checks with:
-          #
-          #   #if defined(HAVE_FUTIMESAT)
-          #
-          # Therefore defining it as 0 is NOT sufficient.
-          #
-          # Remove the generated #define completely.
-          # ----------------------------------------------------------
-
-          while IFS= read -r -d '' f; do
-            sed -i '' \
-              '/^[[:space:]]*#define[[:space:]]\+HAVE_FUTIMESAT[[:space:]]/d' \
-              "$f"
-          done < <(
-            find build/libarchive \
-              -type f \
-              \( \
-                -name 'archive_platform.h' \
-                -o -name 'config.h' \
-              \) \
-              -print0
-          )
-
-          echo "===== libarchive futimesat after fix ====="
-
-          if grep -R \
-              "HAVE_FUTIMESAT" \
-              build/libarchive \
-              --include='*.h' \
-              --include='CMakeCache.txt'
-          then
-            echo "ERROR: HAVE_FUTIMESAT is still defined"
-            exit 1
-          fi
-
-
-      # ============================================================
-      # Build libarchive
-      # ============================================================
-
-      - name: Build libarchive
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cmake \
-            --build build/libarchive \
-            --parallel "$(sysctl -n hw.ncpu)" \
-            --target archive_static
+          test -d "${LIBARCHIVE_SLICE}"
 
           LIBARCHIVE="$(
-            find build/libarchive \
+            find "${LIBARCHIVE_SLICE}" \
               -type f \
-              -name 'libarchive*.a' \
+              -name 'libarchive.a' \
               -print \
-              | head -1
+              -quit
           )"
 
           test -n "${LIBARCHIVE}"
           test -f "${LIBARCHIVE}"
 
+          LIBARCHIVE_HEADERS="$(
+            find "${LIBARCHIVE_SLICE}" \
+              -type d \
+              -name 'Headers' \
+              -print \
+              -quit
+          )"
+
+          test -n "${LIBARCHIVE_HEADERS}"
+          test -d "${LIBARCHIVE_HEADERS}"
+
           echo "LIBARCHIVE=${GITHUB_WORKSPACE}/${LIBARCHIVE}" >> "${GITHUB_ENV}"
+          echo "LIBARCHIVE_HEADERS=${GITHUB_WORKSPACE}/${LIBARCHIVE_HEADERS}" >> "${GITHUB_ENV}"
 
           echo "===== libarchive ====="
+          echo "${LIBARCHIVE}"
+
           file "${LIBARCHIVE}"
 
+          echo "===== libarchive headers ====="
+          echo "${LIBARCHIVE_HEADERS}"
+
 
       # ============================================================
-      # Download curl
+      # Validate libarchive is an iOS device arm64 library
       # ============================================================
 
-      - name: Download curl
+      - name: Validate libarchive architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f "${LIBARCHIVE}"
+
+          echo "===== libarchive architecture ====="
+
+          file "${LIBARCHIVE}"
+
+          lipo -info "${LIBARCHIVE}"
+
+          # A device slice must be arm64.
+          lipo -info "${LIBARCHIVE}" \
+            | grep -E 'arm64|Architectures in the fat file'
+
+          # Make sure it is not simulator-only.
+          if file "${LIBARCHIVE}" | grep -qi simulator; then
+            echo "ERROR: simulator libarchive detected"
+            exit 1
+          fi
+
+
+      # ============================================================
+      # Download prebuilt libcurl XCFramework
+      #
+      # NO curl compilation.
+      #
+      # The selected project provides OpenSSL-backed iOS curl.
+      # ============================================================
+
+      - name: Download prebuilt libcurl
         shell: bash
         run: |
           set -euo pipefail
@@ -475,6 +453,102 @@ jobs:
           rm -rf third_party/curl
           mkdir -p third_party/curl
 
+          API_URL="https://api.github.com/repos/${CURL_REPOSITORY}/releases/latest"
+
+          echo "===== curl release ====="
+          echo "${API_URL}"
+
+          RELEASE_JSON="${RUNNER_TEMP}/curl-release.json"
+
+          curl \
+            --fail \
+            --location \
+            --retry 8 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --max-time 120 \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -o "${RELEASE_JSON}" \
+            "${API_URL}"
+
+          test -s "${RELEASE_JSON}"
+
+          python3 - "${RELEASE_JSON}" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          assets = data.get("assets", [])
+
+          candidates = []
+
+          for asset in assets:
+              name = asset.get("name", "")
+              url = asset.get("browser_download_url", "")
+
+              lower = name.lower()
+
+              if (
+                  "xcframework" in lower
+                  and "zip" in lower
+                  and "curl" in lower
+                  and url
+              ):
+                  # Prefer the normal C curl XCFramework.
+                  if "swift" not in lower:
+                      candidates.append((name, url))
+
+          if not candidates:
+              # Fall back to any curl XCFramework ZIP.
+              for asset in assets:
+                  name = asset.get("name", "")
+                  url = asset.get("browser_download_url", "")
+
+                  lower = name.lower()
+
+                  if (
+                      "xcframework" in lower
+                      and "zip" in lower
+                      and "curl" in lower
+                      and url
+                  ):
+                      candidates.append((name, url))
+
+          if not candidates:
+              raise SystemExit(
+                  "No curl XCFramework ZIP asset found in latest release"
+              )
+
+          candidates.sort(
+              key=lambda item: (
+                  "swift" in item[0].lower(),
+                  item[0].lower(),
+              )
+          )
+
+          name, url = candidates[0]
+
+          print(f"CURL_ASSET_NAME={name}")
+          print(f"CURL_ASSET_URL={url}")
+
+          with open(
+              "${GITHUB_ENV}",
+              "a",
+              encoding="utf-8",
+          ) as env:
+              env.write(f"CURL_ASSET_NAME={name}\n")
+              env.write(f"CURL_ASSET_URL={url}\n")
+          PY
+
+          echo "===== downloading ====="
+          echo "${CURL_ASSET_NAME}"
+          echo "${CURL_ASSET_URL}"
+
           curl \
             --fail \
             --location \
@@ -482,155 +556,130 @@ jobs:
             --retry-all-errors \
             --connect-timeout 30 \
             --max-time 1200 \
-            -o third_party/curl.tar.xz \
-            "${CURL_URL}"
+            -o third_party/curl.xcframework.zip \
+            "${CURL_ASSET_URL}"
 
-          test -s third_party/curl.tar.xz
+          test -s third_party/curl.xcframework.zip
 
-          tar \
-            -xJf third_party/curl.tar.xz \
-            -C third_party/curl \
-            --strip-components=1
+          unzip \
+            -q \
+            third_party/curl.xcframework.zip \
+            -d third_party/curl
 
-          test -f third_party/curl/CMakeLists.txt
+          echo "===== curl files ====="
+
+          find third_party/curl \
+            -maxdepth 5 \
+            -type f \
+            -print
 
 
       # ============================================================
-      # Configure curl
-      #
-      # NTLM is disabled because curl's NTLM implementation requires
-      # DES support, which is not available in the bundled OpenSSL
-      # configuration used for this iOS build.
+      # Extract iOS arm64 libcurl
       # ============================================================
 
-      - name: Configure curl
+      - name: Select libcurl iOS arm64
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf build/curl
+          CURL_XCFRAMEWORK="$(
+            find third_party/curl \
+              -type d \
+              -name '*.xcframework' \
+              -print \
+              -quit
+          )"
 
-          cmake \
-            -S third_party/curl \
-            -B build/curl \
-            -G "Unix Makefiles" \
-            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/toolchain/ios-arm64.cmake" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_STATIC_LIBS=ON \
-            -DBUILD_CURL_EXE=OFF \
-            -DBUILD_STATIC_CURL=OFF \
-            -DBUILD_EXAMPLES=OFF \
-            -DBUILD_LIBCURL_DOCS=OFF \
-            -DBUILD_MISC_DOCS=OFF \
-            -DBUILD_TESTING=OFF \
-            -DCURL_ENABLE_NTLM=OFF \
-            -DENABLE_THREADED_RESOLVER=OFF \
-            -DCURL_USE_OPENSSL=ON \
-            -DOPENSSL_ROOT_DIR="${GITHUB_WORKSPACE}/source" \
-            -DOPENSSL_INCLUDE_DIR="${GITHUB_WORKSPACE}/source/openssl_include" \
-            -DOPENSSL_CRYPTO_LIBRARY="${CRYPTO}" \
-            -DOPENSSL_SSL_LIBRARY="${SSL}" \
-            -DCURL_USE_LIBPSL=OFF \
-            -DCURL_USE_LIBSSH2=OFF \
-            -DCURL_USE_GSSAPI=OFF \
-            -DCURL_USE_MBEDTLS=OFF \
-            -DCURL_USE_WOLFSSL=OFF \
-            -DCURL_USE_GNUTLS=OFF \
-            -DCURL_USE_RUSTLS=OFF \
-            -DCURL_DISABLE_LDAP=ON \
-            -DCURL_DISABLE_LDAPS=ON \
-            -DCURL_DISABLE_TELNET=ON \
-            -DCURL_DISABLE_DICT=ON \
-            -DCURL_DISABLE_GOPHER=ON \
-            -DCURL_DISABLE_IMAP=ON \
-            -DCURL_DISABLE_POP3=ON \
-            -DCURL_DISABLE_RTSP=ON \
-            -DCURL_DISABLE_SMB=ON \
-            -DCURL_DISABLE_SMTP=ON \
-            -DCURL_DISABLE_TFTP=ON \
-            -DCURL_DISABLE_MQTT=ON \
-            -DCURL_DISABLE_SRP=ON \
-            -DCURL_DISABLE_BROTLI=ON \
-            -DCURL_DISABLE_ZSTD=ON \
-            -DCURL_DISABLE_LIBPSL=ON \
-            -DCURL_DISABLE_HSTS=OFF \
-            -DCURL_DISABLE_COOKIES=OFF \
-            -DCURL_DISABLE_HTTP=OFF \
-            -DCURL_DISABLE_HTTP_AUTH=OFF \
-            -DCURL_DISABLE_BASIC_AUTH=OFF \
-            -DCURL_DISABLE_DIGEST_AUTH=OFF \
-            -DCURL_DISABLE_BEARER_AUTH=OFF \
-            -DCURL_DISABLE_NEGOTIATE_AUTH=ON \
-            -DCURL_DISABLE_KERBEROS_AUTH=ON \
-            -DCURL_CA_BUNDLE=none \
-            -DCURL_CA_PATH=none \
-            -DCURL_CA_FALLBACK=ON
+          test -n "${CURL_XCFRAMEWORK}"
+          test -d "${CURL_XCFRAMEWORK}"
 
-          test -f build/curl/CMakeCache.txt
+          CURL_SLICE="${CURL_XCFRAMEWORK}/ios-arm64"
 
-
-      # ============================================================
-      # Build curl
-      # ============================================================
-
-      - name: Build curl
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cmake \
-            --build build/curl \
-            --parallel "$(sysctl -n hw.ncpu)" \
-            --target libcurl_static
+          test -d "${CURL_SLICE}"
 
           CURL_LIB="$(
-            find build/curl \
+            find "${CURL_SLICE}" \
               -type f \
-              -name 'libcurl*.a' \
+              -name 'libcurl.a' \
               -print \
-              | head -1
+              -quit
           )"
 
           test -n "${CURL_LIB}"
           test -f "${CURL_LIB}"
 
+          CURL_HEADERS="$(
+            find "${CURL_SLICE}" \
+              -type d \
+              -name 'Headers' \
+              -print \
+              -quit
+          )"
+
+          test -n "${CURL_HEADERS}"
+          test -d "${CURL_HEADERS}"
+
           echo "CURL=${GITHUB_WORKSPACE}/${CURL_LIB}" >> "${GITHUB_ENV}"
+          echo "CURL_HEADERS=${GITHUB_WORKSPACE}/${CURL_HEADERS}" >> "${GITHUB_ENV}"
 
           echo "===== libcurl ====="
+          echo "${CURL_LIB}"
+
           file "${CURL_LIB}"
 
+          echo "===== libcurl headers ====="
+          echo "${CURL_HEADERS}"
+
 
       # ============================================================
-      # Validate all static libraries
+      # Validate libcurl architecture
       # ============================================================
 
-      - name: Validate dependency architectures
+      - name: Validate libcurl architecture
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f "${CRYPTO}"
-          test -f "${SSL}"
-          test -f "${PLIST}"
-          test -f "${LIBARCHIVE}"
           test -f "${CURL}"
 
-          echo "===== OpenSSL crypto ====="
-          file "${CRYPTO}"
+          echo "===== libcurl architecture ====="
 
-          echo "===== OpenSSL ssl ====="
-          file "${SSL}"
-
-          echo "===== libplist ====="
-          file "${PLIST}"
-
-          echo "===== libarchive ====="
-          file "${LIBARCHIVE}"
-
-          echo "===== curl ====="
           file "${CURL}"
+
+          lipo -info "${CURL}"
+
+          lipo -info "${CURL}" \
+            | grep -E 'arm64|Architectures in the fat file'
+
+          if file "${CURL}" | grep -qi simulator; then
+            echo "ERROR: simulator libcurl detected"
+            exit 1
+          fi
+
+
+      # ============================================================
+      # Validate static library symbols
+      # ============================================================
+
+      - name: Validate static library symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== libarchive symbols ====="
+
+          nm -gU "${LIBARCHIVE}" \
+            | grep -E \
+                'archive_read_new|archive_write_new' \
+            | head -20
+
+          echo "===== libcurl symbols ====="
+
+          nm -gU "${CURL}" \
+            | grep -E \
+                'curl_easy_init|curl_easy_cleanup|curl_easy_perform' \
+            | head -20
 
 
       # ============================================================
@@ -666,8 +715,8 @@ jobs:
             -Werror \
             -I"${GITHUB_WORKSPACE}/source/openssl_include" \
             -I"${GITHUB_WORKSPACE}/source/libplist_include" \
-            -I"${GITHUB_WORKSPACE}/third_party/libarchive/libarchive" \
-            -I"${GITHUB_WORKSPACE}/third_party/curl/include" \
+            -I"${LIBARCHIVE_HEADERS}" \
+            -I"${CURL_HEADERS}" \
             source/ldid.cpp \
             "${PLIST}" \
             "${LIBARCHIVE}" \
@@ -687,9 +736,6 @@ jobs:
 
       # ============================================================
       # Validate final Mach-O
-      #
-      # Do NOT execute it:
-      # it is an iPhoneOS arm64 binary and the runner is macOS.
       # ============================================================
 
       - name: Validate final binary
@@ -698,23 +744,29 @@ jobs:
           set -euo pipefail
 
           echo "===== file ====="
+
           file build/ldid/ldid
 
           echo "===== architecture ====="
+
           lipo -info build/ldid/ldid
 
           echo "===== Mach-O header ====="
+
           otool -hv build/ldid/ldid
 
           echo "===== build version ====="
-          otool -l build/ldid/ldid | grep -A5 LC_BUILD_VERSION
+
+          otool -l build/ldid/ldid \
+            | grep -A5 LC_BUILD_VERSION
 
           echo "===== linked libraries ====="
+
           otool -L build/ldid/ldid
 
 
       # ============================================================
-      # Validate iOS deployment target
+      # Validate iOS platform
       # ============================================================
 
       - name: Validate iOS deployment target
@@ -731,7 +783,7 @@ jobs:
             LC_BUILD_VERSION \
             build/ldid/load-commands.txt
 
-          echo "===== platform check ====="
+          echo "===== iOS platform ====="
 
           grep -A5 \
             LC_BUILD_VERSION \
@@ -740,7 +792,7 @@ jobs:
 
 
       # ============================================================
-      # Strip final binary
+      # Strip
       # ============================================================
 
       - name: Strip final binary
@@ -759,7 +811,7 @@ jobs:
 
           test -s build/ldid/ldid
 
-          echo "===== final binary ====="
+          echo "===== stripped binary ====="
 
           file build/ldid/ldid
 
@@ -795,20 +847,18 @@ jobs:
             ldid-ios-arm64.tar.gz \
             > ldid-ios-arm64.tar.gz.sha256
 
-          echo "===== artifact ====="
+          echo "===== final artifact ====="
 
           ls -lh \
             ldid-ios-arm64.tar.gz \
             ldid-ios-arm64.tar.gz.sha256
-
-          echo "===== SHA256 ====="
 
           cat \
             ldid-ios-arm64.tar.gz.sha256
 
 
       # ============================================================
-      # Upload final iOS artifact
+      # Upload
       # ============================================================
 
       - name: Upload iOS artifact
