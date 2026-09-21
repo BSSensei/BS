@@ -89,11 +89,13 @@ jobs:
           rm -rf third_party
           mkdir -p third_party/openssl third_party/curl
 
+          # OpenSSL xcframework
           curl -fL --retry 5 --retry-all-errors \
             --connect-timeout 30 --max-time 900 \
             "${OPENSSL_URL}" -o /tmp/OpenSSL.xcframework.zip
           unzip -q -o /tmp/OpenSSL.xcframework.zip -d third_party/openssl
 
+          # libcurl artifact
           HTTP_CODE="$(curl -sSL -w '%{http_code}' -o /tmp/libcurl_artifact.zip "${CURL_URL}" || echo '000')"
           echo "HTTP code: ${HTTP_CODE}"
           if [ "${HTTP_CODE}" != "200" ]; then
@@ -102,6 +104,7 @@ jobs:
           fi
           unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
 
+          # curl headers
           rm -rf /tmp/curl-source
           mkdir -p /tmp/curl-source
           curl -fL --retry 5 --retry-all-errors \
@@ -113,11 +116,11 @@ jobs:
           cp -R /tmp/curl-source/curl-8.17.0/include/curl third_party/curl-headers/
           test -f third_party/curl-headers/curl/curl.h
 
+          # libarchive
           git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
 
       # ============================================================
       # libplist 头文件大小写规范化
-      # 无括号、无转义，纯简单 find + while
       # ============================================================
       - name: Normalize libplist header names
         shell: bash
@@ -127,7 +130,6 @@ jobs:
           echo "===== Before normalize ====="
           find source/libplist_include -type f -print | sort
 
-          # 收集所有 .h / .hpp / .hxx
           find source/libplist_include -type f -name '*.h'   -print > /tmp/hdrs.txt
           find source/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs.txt
           find source/libplist_include -type f -name '*.hxx' -print >> /tmp/hdrs.txt
@@ -138,7 +140,6 @@ jobs:
             base="$(basename "$f")"
             lower="$(printf '%s' "$base" | tr 'A-Z' 'a-z')"
             if [ "$base" != "$lower" ]; then
-              # 若小写文件不存在，则做一个副本
               if [ ! -e "${dir}/${lower}" ]; then
                 cp "${f}" "${dir}/${lower}"
                 echo "copy: ${dir}/${lower}  <=  ${base}"
@@ -157,7 +158,6 @@ jobs:
           echo "===== libplist tree ====="
           find source/libplist_include -type f -print | sort | head -n 200
 
-          # -iname 大小写不敏感，无需括号
           NODE_HEADER="$(find source/libplist_include -type f -iname 'Node.h'   -print -quit)"
           PLIST_HEADER="$(find source/libplist_include -type f -iname 'plist.h' -print -quit)"
           STRING_HEADER="$(find source/libplist_include -type f -iname 'string.h' -print -quit)"
@@ -179,7 +179,6 @@ jobs:
           echo "plist.h:  ${PLIST_HEADER}"
           echo "string.h: ${STRING_HEADER}"
 
-          # 小写路径必须可访问（编译器 #include <plist/string.h> 需要）
           test -f source/libplist_include/plist/string.h
           echo "OK: source/libplist_include/plist/string.h is accessible"
 
@@ -311,7 +310,7 @@ jobs:
           cp -R source/libplist_include theos-build/libplist_include
           cp -R source/libplist_lib     theos-build/libplist_lib
 
-          # 二次规范化（防止 cp 处理大小写差异）
+          # 二次规范化
           find theos-build/libplist_include -type f -name '*.h'   -print > /tmp/hdrs2.txt
           find theos-build/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs2.txt
 
@@ -349,9 +348,9 @@ jobs:
           PLIST_INCLUDE_DIR := ${PLIST_INCLUDE_DIR}
 
           LDID_INC := -I\$(PLIST_INCLUDE_DIR) -I\$(OPENSSL_INCLUDE_ROOT) -I\$(CURL_INCLUDE_DIR) -I\$(ARCHIVE_INCLUDE_DIR)
-          LDID_OPT := -std=c++20 -O3 -DNDEBUG -flto=thin -fstrict-aliasing -fvectorize -fslp-vectorize -ffunction-sections -fdata-sections -fvisibility=hidden -fno-modules -fno-modules-cache
-          LDID_LDF := -L\$(CURL_LIB_DIR) -L\$(ARCHIVE_LIB_DIR) -L\$(PLIST_LIB_DIR) -F\$(OPENSSL_SLICE) -flto=thin -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
-          LDID_LIBS := -lcurl -larchive -lplist -framework OpenSSL -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation -liconv -lxml2 -lz
+          LDID_OPT := -std=c++20 -O3 -DNDEBUG -fstrict-aliasing -fvectorize -fslp-vectorize -ffunction-sections -fdata-sections -fvisibility=hidden
+          LDID_LDF := -L\$(CURL_LIB_DIR) -L\$(ARCHIVE_LIB_DIR) -L\$(PLIST_LIB_DIR) -F\$(OPENSSL_SLICE) -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
+          LDID_LIBS := -lcurl -larchive -lplist -framework OpenSSL -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation -liconv -lxml2 -lz -llzma -lbz2
 
           ADDITIONAL_CFLAGS += \$(LDID_INC) \$(LDID_OPT)
           ADDITIONAL_CXXFLAGS += \$(LDID_INC) \$(LDID_OPT)
