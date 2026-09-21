@@ -206,8 +206,7 @@ jobs:
           if [ "$(basename "${EVP_DIR}")" = "openssl" ]; then
             OPENSSL_INCLUDE_ROOT="$(dirname "${EVP_DIR}")"
           else
-            # 头文件是扁平的，建 shim；同时建 openssl/ 和 OpenSSL/ 两份，
-            # 让 <openssl/...> 和 <OpenSSL/...> 都能精确命中，避免大小写警告
+            # 扁平结构，建 shim，两份目录大小写都提供
             OPENSSL_INCLUDE_ROOT="${WS}/third_party/openssl-shim"
             rm -rf "${OPENSSL_INCLUDE_ROOT}"
             mkdir -p "${OPENSSL_INCLUDE_ROOT}/openssl"
@@ -220,8 +219,8 @@ jobs:
 
           echo "===== OpenSSL include root ====="
           find "${OPENSSL_INCLUDE_ROOT}" -maxdepth 2 -type d -print | sort
-          echo "openssl/evp.h      exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h" && echo yes || echo no)"
-          echo "OpenSSL/evp.h      exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h" && echo yes || echo no)"
+          echo "openssl/evp.h  exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h" && echo yes || echo no)"
+          echo "OpenSSL/evp.h  exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h" && echo yes || echo no)"
 
           # ---------------- libcurl ----------------
           CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' -path '*ios-arm64*' -print -quit)"
@@ -348,7 +347,7 @@ jobs:
           LDID_INC := -I\$(PLIST_INCLUDE_DIR) -I\$(OPENSSL_INCLUDE_ROOT) -I\$(CURL_INCLUDE_DIR) -I\$(ARCHIVE_INCLUDE_DIR)
           LDID_OPT := -std=c++20 -O3 -DNDEBUG -fstrict-aliasing -fvectorize -fslp-vectorize -ffunction-sections -fdata-sections -fvisibility=hidden -Wno-nonportable-include-path -Wno-error=nonportable-include-path
           LDID_LDF := -L\$(CURL_LIB_DIR) -L\$(ARCHIVE_LIB_DIR) -L\$(PLIST_LIB_DIR) -F\$(OPENSSL_SLICE) -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
-          LDID_LIBS := -lcurl -larchive -lplist -framework OpenSSL -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation -liconv -lxml2 -lz -llzma -lbz2
+          LDID_LIBS := -lcurl -larchive -lplist -framework OpenSSL -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation -framework IOKit -framework MobileCoreServices -liconv -lxml2 -lz -llzma -lbz2 -lobjc
 
           ADDITIONAL_CFLAGS += \$(LDID_INC) \$(LDID_OPT)
           ADDITIONAL_CXXFLAGS += \$(LDID_INC) \$(LDID_OPT)
@@ -395,11 +394,11 @@ jobs:
       - name: Build with Theos
         shell: bash
         run: |
-          set -euo pipefail
           cd theos-build
 
           make clean || true
 
+          set +e
           make \
             THEOS="${THEOS}" \
             TARGET="iphone:clang:16.5:16.0" \
@@ -409,18 +408,44 @@ jobs:
             QUIET= \
             _THEOS_VERBOSE=1 \
             -j"$(sysctl -n hw.logicalcpu_max)" \
-            2>&1 | tee /tmp/theos-build.log
+            > /tmp/theos-build.log 2>&1
+          MAKE_RC=$?
+          set -e
 
+          echo "make exit code: ${MAKE_RC}"
           echo "=================================================="
-          echo "Compile command samples"
+          echo "Full build log"
           echo "=================================================="
-          grep -E 'clang(\+\+)? .*ldid\.cpp' /tmp/theos-build.log | head -n 5 || true
+          cat /tmp/theos-build.log
+
+          echo
+          echo "=================================================="
+          echo "Linker invocation"
+          echo "=================================================="
+          grep -nE 'clang(\+\+)? .*ldid' /tmp/theos-build.log | tail -n 5 || true
+
+          echo
+          echo "=================================================="
+          echo "Undefined symbols (if any)"
+          echo "=================================================="
+          grep -nA 200 'Undefined symbols' /tmp/theos-build.log || true
+
+          echo
+          echo "=================================================="
+          echo "ld error/warning lines"
+          echo "=================================================="
+          grep -nE '^ld: |ld: warning|ld: error' /tmp/theos-build.log || true
 
           echo
           echo "=================================================="
           echo "Find built ldid"
           echo "=================================================="
           find . -type f -name 'ldid' -print | sort
+
+          if [ "${MAKE_RC}" -ne 0 ]; then
+            echo "ERROR: make failed with exit code ${MAKE_RC}"
+            exit "${MAKE_RC}"
+          fi
 
           BUILT="$(find . -type f -name 'ldid' -perm -u+x -print | head -n 1)"
           if [ -z "${BUILT}" ]; then
@@ -429,7 +454,6 @@ jobs:
 
           if [ -z "${BUILT}" ]; then
             echo "ERROR: built ldid not found"
-            tail -n 120 /tmp/theos-build.log || true
             exit 1
           fi
 
