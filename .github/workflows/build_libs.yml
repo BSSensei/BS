@@ -89,13 +89,11 @@ jobs:
           rm -rf third_party
           mkdir -p third_party/openssl third_party/curl
 
-          # OpenSSL xcframework
           curl -fL --retry 5 --retry-all-errors \
             --connect-timeout 30 --max-time 900 \
             "${OPENSSL_URL}" -o /tmp/OpenSSL.xcframework.zip
           unzip -q -o /tmp/OpenSSL.xcframework.zip -d third_party/openssl
 
-          # libcurl artifact
           HTTP_CODE="$(curl -sSL -w '%{http_code}' -o /tmp/libcurl_artifact.zip "${CURL_URL}" || echo '000')"
           echo "HTTP code: ${HTTP_CODE}"
           if [ "${HTTP_CODE}" != "200" ]; then
@@ -104,7 +102,6 @@ jobs:
           fi
           unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
 
-          # curl headers
           rm -rf /tmp/curl-source
           mkdir -p /tmp/curl-source
           curl -fL --retry 5 --retry-all-errors \
@@ -116,39 +113,75 @@ jobs:
           cp -R /tmp/curl-source/curl-8.17.0/include/curl third_party/curl-headers/
           test -f third_party/curl-headers/curl/curl.h
 
-          # libarchive
           git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
+
+      # ============================================================
+      # libplist 头文件大小写规范化
+      # 无括号、无转义，纯简单 find + while
+      # ============================================================
+      - name: Normalize libplist header names
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "===== Before normalize ====="
+          find source/libplist_include -type f -print | sort
+
+          # 收集所有 .h / .hpp / .hxx
+          find source/libplist_include -type f -name '*.h'   -print > /tmp/hdrs.txt
+          find source/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs.txt
+          find source/libplist_include -type f -name '*.hxx' -print >> /tmp/hdrs.txt
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            dir="$(dirname "$f")"
+            base="$(basename "$f")"
+            lower="$(printf '%s' "$base" | tr 'A-Z' 'a-z')"
+            if [ "$base" != "$lower" ]; then
+              # 若小写文件不存在，则做一个副本
+              if [ ! -e "${dir}/${lower}" ]; then
+                cp "${f}" "${dir}/${lower}"
+                echo "copy: ${dir}/${lower}  <=  ${base}"
+              fi
+            fi
+          done < /tmp/hdrs.txt
+
+          echo "===== After normalize ====="
+          find source/libplist_include -type f -print | sort
 
       - name: Validate libplist headers
         shell: bash
         run: |
           set -euo pipefail
-          echo "===== libplist tree ====="
-          find source/libplist_include -type f | sort | head -n 200
 
-          NODE_HEADER="$(find source/libplist_include -type f -name 'Node.h' -print -quit)"
-          PLIST_HEADER="$(find source/libplist_include -type f -name 'plist.h' -print -quit)"
-          STRING_HEADER="$(find source/libplist_include -type f -name 'string.h' -print -quit)"
+          echo "===== libplist tree ====="
+          find source/libplist_include -type f -print | sort | head -n 200
+
+          # -iname 大小写不敏感，无需括号
+          NODE_HEADER="$(find source/libplist_include -type f -iname 'Node.h'   -print -quit)"
+          PLIST_HEADER="$(find source/libplist_include -type f -iname 'plist.h' -print -quit)"
+          STRING_HEADER="$(find source/libplist_include -type f -iname 'string.h' -print -quit)"
 
           if [ -z "${NODE_HEADER}" ]; then
-            echo "ERROR: plist/Node.h missing from ldid.zip"
-            echo "This is the reason for the compilation failure."
+            echo "ERROR: Node.h missing from ldid.zip"
             exit 1
           fi
-
           if [ -z "${PLIST_HEADER}" ]; then
-            echo "ERROR: plist/plist.h missing from ldid.zip"
+            echo "ERROR: plist.h missing from ldid.zip"
             exit 1
           fi
-
           if [ -z "${STRING_HEADER}" ]; then
-            echo "ERROR: plist/string.h missing from ldid.zip"
+            echo "ERROR: string.h (or String.h) missing from ldid.zip"
             exit 1
           fi
 
-          echo "Node.h: ${NODE_HEADER}"
-          echo "plist.h: ${PLIST_HEADER}"
+          echo "Node.h:   ${NODE_HEADER}"
+          echo "plist.h:  ${PLIST_HEADER}"
           echo "string.h: ${STRING_HEADER}"
+
+          # 小写路径必须可访问（编译器 #include <plist/string.h> 需要）
+          test -f source/libplist_include/plist/string.h
+          echo "OK: source/libplist_include/plist/string.h is accessible"
 
       - name: Detect dependency paths
         shell: bash
@@ -158,11 +191,9 @@ jobs:
           WS="${GITHUB_WORKSPACE}"
 
           # ---------------- OpenSSL ----------------
-          OPENSSL_FW="$(find "${WS}/third_party/openssl" \
-            -type d -name 'OpenSSL.framework' -path '*ios-arm64*' -print -quit)"
+          OPENSSL_FW="$(find "${WS}/third_party/openssl" -type d -name 'OpenSSL.framework' -path '*ios-arm64*' -print -quit)"
           if [ -z "${OPENSSL_FW}" ]; then
-            OPENSSL_FW="$(find "${WS}/third_party/openssl" \
-              -type d -name 'OpenSSL.framework' -print -quit)"
+            OPENSSL_FW="$(find "${WS}/third_party/openssl" -type d -name 'OpenSSL.framework' -print -quit)"
           fi
           if [ -z "${OPENSSL_FW}" ]; then
             echo "ERROR: OpenSSL.framework not found"
@@ -192,11 +223,9 @@ jobs:
           test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
 
           # ---------------- libcurl ----------------
-          CURL_LIB="$(find "${WS}/third_party/curl" \
-            -type f -name 'libcurl.a' -path '*ios-arm64*' -print -quit)"
+          CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' -path '*ios-arm64*' -print -quit)"
           if [ -z "${CURL_LIB}" ]; then
-            CURL_LIB="$(find "${WS}/third_party/curl" \
-              -type f -name 'libcurl.a' -print -quit)"
+            CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' -print -quit)"
           fi
           if [ -z "${CURL_LIB}" ]; then
             echo "ERROR: libcurl.a not found"
@@ -207,16 +236,13 @@ jobs:
           CURL_INCLUDE_DIR="${WS}/third_party/curl-headers"
           if [ ! -f "${CURL_INCLUDE_DIR}/curl/curl.h" ]; then
             echo "ERROR: curl.h not found under ${CURL_INCLUDE_DIR}"
-            find "${WS}/third_party" -type f -name 'curl.h' -print
             exit 1
           fi
 
           # ---------------- libarchive ----------------
-          ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" \
-            -type f -name 'libarchive.a' -path '*ios-arm64*' -print -quit)"
+          ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' -path '*ios-arm64*' -print -quit)"
           if [ -z "${ARCHIVE_LIB}" ]; then
-            ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" \
-              -type f -name 'libarchive.a' -print -quit)"
+            ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' -print -quit)"
           fi
           if [ -z "${ARCHIVE_LIB}" ]; then
             echo "ERROR: libarchive.a not found"
@@ -224,8 +250,7 @@ jobs:
             exit 1
           fi
 
-          ARCHIVE_INCLUDE="$(find "${WS}/third_party/libarchive" \
-            -type f -name 'archive.h' -print -quit)"
+          ARCHIVE_INCLUDE="$(find "${WS}/third_party/libarchive" -type f -name 'archive.h' -print -quit)"
           if [ -z "${ARCHIVE_INCLUDE}" ]; then
             echo "ERROR: archive.h not found"
             exit 1
@@ -233,22 +258,24 @@ jobs:
 
           # ---------------- libplist ----------------
           PLIST_INCLUDE_ROOT="${WS}/source/libplist_include"
-          PLIST_HEADER="${PLIST_INCLUDE_ROOT}/plist/plist.h"
-          if [ ! -f "${PLIST_HEADER}" ]; then
-            echo "ERROR: ${PLIST_HEADER} not found"
+
+          if [ ! -f "${PLIST_INCLUDE_ROOT}/plist/plist.h" ]; then
+            echo "ERROR: ${PLIST_INCLUDE_ROOT}/plist/plist.h not found"
+            find "${PLIST_INCLUDE_ROOT}" -type f -print | sort
+            exit 1
+          fi
+          if [ ! -f "${PLIST_INCLUDE_ROOT}/plist/Node.h" ]; then
+            echo "ERROR: ${PLIST_INCLUDE_ROOT}/plist/Node.h not found"
+            find "${PLIST_INCLUDE_ROOT}" -type f -print | sort
+            exit 1
+          fi
+          if [ ! -f "${PLIST_INCLUDE_ROOT}/plist/string.h" ]; then
+            echo "ERROR: ${PLIST_INCLUDE_ROOT}/plist/string.h not accessible"
             find "${PLIST_INCLUDE_ROOT}" -type f -print | sort
             exit 1
           fi
 
-          NODE_HEADER="${PLIST_INCLUDE_ROOT}/plist/Node.h"
-          if [ ! -f "${NODE_HEADER}" ]; then
-            echo "ERROR: ${NODE_HEADER} not found"
-            find "${PLIST_INCLUDE_ROOT}" -type f -print | sort
-            exit 1
-          fi
-
-          PLIST_LIB="$(find "${WS}/source/libplist_lib" \
-            -type f -name 'libplist*.a' -print -quit)"
+          PLIST_LIB="$(find "${WS}/source/libplist_lib" -type f -name 'libplist*.a' -print -quit)"
           if [ -z "${PLIST_LIB}" ]; then
             echo "ERROR: libplist*.a not found"
             find "${WS}/source/libplist_lib" -maxdepth 3 -type f -print
@@ -269,7 +296,7 @@ jobs:
           echo "=================================================="
           echo "Detected paths"
           echo "=================================================="
-          cat "${GITHUB_ENV}" || true
+          grep -E '^(OPENSSL_|CURL_|ARCHIVE_|PLIST_)' "${GITHUB_ENV}" || true
 
       - name: Prepare optimized Theos project
         shell: bash
@@ -282,7 +309,28 @@ jobs:
           cp source/ldid.cpp theos-build/ldid.cpp
           cp source/ldid.hpp theos-build/ldid.hpp
           cp -R source/libplist_include theos-build/libplist_include
-          cp -R source/libplist_lib theos-build/libplist_lib
+          cp -R source/libplist_lib     theos-build/libplist_lib
+
+          # 二次规范化（防止 cp 处理大小写差异）
+          find theos-build/libplist_include -type f -name '*.h'   -print > /tmp/hdrs2.txt
+          find theos-build/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs2.txt
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            dir="$(dirname "$f")"
+            base="$(basename "$f")"
+            lower="$(printf '%s' "$base" | tr 'A-Z' 'a-z')"
+            if [ "$base" != "$lower" ] && [ ! -e "${dir}/${lower}" ]; then
+              cp "${f}" "${dir}/${lower}"
+            fi
+          done < /tmp/hdrs2.txt
+
+          echo "===== theos-build/libplist_include ====="
+          find theos-build/libplist_include -type f -print | sort
+
+          test -f theos-build/libplist_include/plist/string.h
+          test -f theos-build/libplist_include/plist/Node.h
+          test -f theos-build/libplist_include/plist/plist.h
 
           cat > theos-build/Makefile <<EOF
           THEOS ?= ${THEOS}
@@ -300,10 +348,6 @@ jobs:
           PLIST_LIB_DIR := ${PLIST_LIB_DIR}
           PLIST_INCLUDE_DIR := ${PLIST_INCLUDE_DIR}
 
-          # 修正关键问题：
-          # 1. 禁用 Clang modules，避免 Darwin -> std -> Darwin 循环依赖
-          # 2. 强制使用 Release/O3
-          # 3. 不再使用错误的 -lxml[...] 形式
           LDID_INC := -I\$(PLIST_INCLUDE_DIR) -I\$(OPENSSL_INCLUDE_ROOT) -I\$(CURL_INCLUDE_DIR) -I\$(ARCHIVE_INCLUDE_DIR)
           LDID_OPT := -std=c++20 -O3 -DNDEBUG -flto=thin -fstrict-aliasing -fvectorize -fslp-vectorize -ffunction-sections -fdata-sections -fvisibility=hidden -fno-modules -fno-modules-cache
           LDID_LDF := -L\$(CURL_LIB_DIR) -L\$(ARCHIVE_LIB_DIR) -L\$(PLIST_LIB_DIR) -F\$(OPENSSL_SLICE) -flto=thin -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
@@ -345,6 +389,11 @@ jobs:
           echo "libplist Node.h exists:"
           test -f "${PLIST_INCLUDE_DIR}/plist/Node.h"
           echo "${PLIST_INCLUDE_DIR}/plist/Node.h"
+
+          echo
+          echo "libplist string.h exists:"
+          test -f "${PLIST_INCLUDE_DIR}/plist/string.h"
+          echo "${PLIST_INCLUDE_DIR}/plist/string.h"
 
       - name: Build with Theos
         shell: bash
