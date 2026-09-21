@@ -194,6 +194,15 @@ jobs:
           fi
 
           OPENSSL_SLICE="$(dirname "${OPENSSL_FW}")"
+          OPENSSL_LIB="${OPENSSL_FW}/OpenSSL"
+          if [ ! -f "${OPENSSL_LIB}" ]; then
+            echo "ERROR: ${OPENSSL_LIB} not found"
+            find "${OPENSSL_FW}" -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          file "${OPENSSL_LIB}"
+          lipo -info "${OPENSSL_LIB}"
 
           EVP_H="$(find "${OPENSSL_FW}" -type f -name 'evp.h' -print -quit)"
           if [ -z "${EVP_H}" ]; then
@@ -206,7 +215,6 @@ jobs:
           if [ "$(basename "${EVP_DIR}")" = "openssl" ]; then
             OPENSSL_INCLUDE_ROOT="$(dirname "${EVP_DIR}")"
           else
-            # 扁平结构，建 shim，两份目录大小写都提供
             OPENSSL_INCLUDE_ROOT="${WS}/third_party/openssl-shim"
             rm -rf "${OPENSSL_INCLUDE_ROOT}"
             mkdir -p "${OPENSSL_INCLUDE_ROOT}/openssl"
@@ -217,8 +225,11 @@ jobs:
 
           test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
 
-          echo "===== OpenSSL include root ====="
-          find "${OPENSSL_INCLUDE_ROOT}" -maxdepth 2 -type d -print | sort
+          echo "===== OpenSSL ====="
+          echo "OPENSSL_FW           = ${OPENSSL_FW}"
+          echo "OPENSSL_SLICE        = ${OPENSSL_SLICE}"
+          echo "OPENSSL_LIB          = ${OPENSSL_LIB}"
+          echo "OPENSSL_INCLUDE_ROOT = ${OPENSSL_INCLUDE_ROOT}"
           echo "openssl/evp.h  exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h" && echo yes || echo no)"
           echo "OpenSSL/evp.h  exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h" && echo yes || echo no)"
 
@@ -283,6 +294,7 @@ jobs:
           fi
 
           {
+            echo "OPENSSL_LIB=${OPENSSL_LIB}"
             echo "OPENSSL_INCLUDE_ROOT=${OPENSSL_INCLUDE_ROOT}"
             echo "OPENSSL_SLICE=${OPENSSL_SLICE}"
             echo "CURL_LIB_DIR=$(dirname "${CURL_LIB}")"
@@ -336,7 +348,6 @@ jobs:
           ldid_FILES := ldid.cpp
 
           OPENSSL_INCLUDE_ROOT := ${OPENSSL_INCLUDE_ROOT}
-          OPENSSL_SLICE := ${OPENSSL_SLICE}
           CURL_LIB_DIR := ${CURL_LIB_DIR}
           CURL_INCLUDE_DIR := ${CURL_INCLUDE_DIR}
           ARCHIVE_LIB_DIR := ${ARCHIVE_LIB_DIR}
@@ -346,8 +357,8 @@ jobs:
 
           LDID_INC := -I\$(PLIST_INCLUDE_DIR) -I\$(OPENSSL_INCLUDE_ROOT) -I\$(CURL_INCLUDE_DIR) -I\$(ARCHIVE_INCLUDE_DIR)
           LDID_OPT := -std=c++20 -O3 -DNDEBUG -fstrict-aliasing -fvectorize -fslp-vectorize -ffunction-sections -fdata-sections -fvisibility=hidden -Wno-nonportable-include-path -Wno-error=nonportable-include-path
-          LDID_LDF := -L\$(CURL_LIB_DIR) -L\$(ARCHIVE_LIB_DIR) -L\$(PLIST_LIB_DIR) -F\$(OPENSSL_SLICE) -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
-          LDID_LIBS := -lcurl -larchive -lplist -framework OpenSSL -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation -framework IOKit -framework MobileCoreServices -liconv -lxml2 -lz -llzma -lbz2 -lobjc
+          LDID_LDF := -L\$(CURL_LIB_DIR) -L\$(ARCHIVE_LIB_DIR) -L\$(PLIST_LIB_DIR) -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
+          LDID_LIBS := -Wl,-force_load,${OPENSSL_LIB} -lcurl -larchive -lplist -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation -framework IOKit -framework MobileCoreServices -liconv -lxml2 -lz -llzma -lbz2 -lobjc
 
           ADDITIONAL_CFLAGS += \$(LDID_INC) \$(LDID_OPT)
           ADDITIONAL_CXXFLAGS += \$(LDID_INC) \$(LDID_OPT)
@@ -377,14 +388,14 @@ jobs:
           cat theos-build/Makefile
 
           echo
+          echo "OpenSSL lib exists:"
+          test -f "${OPENSSL_LIB}"
+          echo "${OPENSSL_LIB}"
+
+          echo
           echo "OpenSSL evp.h (openssl/):"
           test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
           echo "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
-
-          echo
-          echo "OpenSSL evp.h (OpenSSL/):"
-          test -f "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h"
-          echo "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h"
 
           echo
           echo "libplist string.h:"
