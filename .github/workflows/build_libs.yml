@@ -46,6 +46,9 @@ jobs:
           make --version | head -n 1
           sysctl -n hw.logicalcpu_max
 
+      # ============================================================
+      # 解压源码
+      # ============================================================
       - name: Prepare source
         shell: bash
         run: |
@@ -59,6 +62,9 @@ jobs:
           test -d source/libplist_lib
           find source -maxdepth 3 -type f -print | sort
 
+      # ============================================================
+      # Theos
+      # ============================================================
       - name: Setup Theos
         shell: bash
         run: |
@@ -76,6 +82,9 @@ jobs:
           echo "THEOS=${THEOS}" >> "${GITHUB_ENV}"
           git -C "${THEOS}" rev-parse HEAD
 
+      # ============================================================
+      # iPhoneOS SDK
+      # ============================================================
       - name: Install iPhoneOS 16.5 SDK
         shell: bash
         run: |
@@ -91,7 +100,7 @@ jobs:
           test -f "${SDK_DIR}/SDKSettings.plist"
 
       # ============================================================
-      # OpenSSL：只下载 + 检查，不 prepare
+      # OpenSSL：只下载，不做任何 prepare
       # ============================================================
       - name: Download prebuilt OpenSSL
         shell: bash
@@ -103,29 +112,12 @@ jobs:
             --connect-timeout 30 --max-time 900 \
             "${OPENSSL_URL}" -o /tmp/OpenSSL.xcframework.zip
           unzip -q -o /tmp/OpenSSL.xcframework.zip -d third_party/openssl
+          echo "===== OpenSSL tree (depth 4) ====="
+          find third_party/openssl -maxdepth 4 -type d -print | sort
 
-          OPENSSL_FRAMEWORK="${GITHUB_WORKSPACE}/third_party/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework"
-
-          if [ ! -d "${OPENSSL_FRAMEWORK}" ]; then
-            echo "ERROR: OpenSSL framework layout unexpected"
-            find third_party/openssl -maxdepth 4 -type d -print
-            exit 1
-          fi
-          if [ ! -f "${OPENSSL_FRAMEWORK}/OpenSSL" ]; then
-            echo "ERROR: OpenSSL binary missing"
-            ls -la "${OPENSSL_FRAMEWORK}"
-            exit 1
-          fi
-          if [ ! -d "${OPENSSL_FRAMEWORK}/Headers" ]; then
-            echo "ERROR: OpenSSL Headers missing"
-            ls -la "${OPENSSL_FRAMEWORK}"
-            exit 1
-          fi
-
-          file "${OPENSSL_FRAMEWORK}/OpenSSL"
-          lipo -info "${OPENSSL_FRAMEWORK}/OpenSSL"
-          echo "OpenSSL framework: ${OPENSSL_FRAMEWORK}"
-
+      # ============================================================
+      # libcurl 预编译
+      # ============================================================
       - name: Download prebuilt libcurl
         shell: bash
         run: |
@@ -139,8 +131,12 @@ jobs:
             exit 1
           fi
           unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
+          echo "===== libcurl tree (depth 8) ====="
           find third_party/curl -maxdepth 8 -type f -print | sort
 
+      # ============================================================
+      # curl headers（只取头文件）
+      # ============================================================
       - name: Download curl headers
         shell: bash
         run: |
@@ -153,91 +149,199 @@ jobs:
           tar -xJf /tmp/curl-8.17.0.tar.xz -C /tmp/curl-source
           CURL_SOURCE_DIR="/tmp/curl-source/curl-8.17.0"
           test -f "${CURL_SOURCE_DIR}/include/curl/curl.h"
-          rm -rf third_party/curl-ios
-          mkdir -p third_party/curl-ios/include
-          cp -R "${CURL_SOURCE_DIR}/include/curl" third_party/curl-ios/include/
-          test -f third_party/curl-ios/include/curl/curl.h
+          rm -rf third_party/curl-headers
+          mkdir -p third_party/curl-headers
+          cp -R "${CURL_SOURCE_DIR}/include/curl" third_party/curl-headers/
+          test -f third_party/curl-headers/curl/curl.h
 
-      - name: Prepare libcurl arm64
-        shell: bash
-        run: |
-          set -euo pipefail
-          CURL_ROOT="${GITHUB_WORKSPACE}/third_party/curl"
-          mkdir -p third_party/curl-ios/lib
-          CURL_LIB="$(find "${CURL_ROOT}" -type f -path '*/ios-arm64/*' -name 'libcurl.a' -print | head -n 1)"
-          if [ -z "${CURL_LIB}" ]; then
-            CURL_LIB="$(find "${CURL_ROOT}" -type f -name 'libcurl.a' -print | head -n 1)"
-          fi
-          if [ -z "${CURL_LIB}" ]; then
-            echo "ERROR: libcurl.a not found"
-            find "${CURL_ROOT}" -maxdepth 8 -type f -print
-            exit 1
-          fi
-          cp "${CURL_LIB}" third_party/curl-ios/lib/libcurl.a
-          file third_party/curl-ios/lib/libcurl.a
-          lipo -info third_party/curl-ios/lib/libcurl.a
-
+      # ============================================================
+      # libarchive 预编译
+      # ============================================================
       - name: Download prebuilt libarchive
         shell: bash
         run: |
           set -euo pipefail
           rm -rf third_party/libarchive
           git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
-          ARCHIVE_XCFRAMEWORK="$(find "${GITHUB_WORKSPACE}/third_party/libarchive" \
-            -type d -iname 'libarchive*.xcframework' -print -quit)"
-          if [ -z "${ARCHIVE_XCFRAMEWORK}" ]; then
-            echo "ERROR: libarchive xcframework not found"
-            find "${GITHUB_WORKSPACE}/third_party/libarchive" -maxdepth 6 -type d -print
-            exit 1
-          fi
-          ARCHIVE_ROOT="$(find "${ARCHIVE_XCFRAMEWORK}" -type d -name 'ios-arm64' -print -quit)"
-          if [ -z "${ARCHIVE_ROOT}" ]; then
-            echo "ERROR: ios-arm64 slice not found"
-            find "${ARCHIVE_XCFRAMEWORK}" -maxdepth 3 -type d -print
-            exit 1
-          fi
-          test -f "${ARCHIVE_ROOT}/libarchive.a"
-          test -d "${ARCHIVE_ROOT}/Headers"
-          rm -rf third_party/libarchive-ios
-          mkdir -p third_party/libarchive-ios/lib third_party/libarchive-ios/include
-          cp "${ARCHIVE_ROOT}/libarchive.a" third_party/libarchive-ios/lib/libarchive.a
-          cp -R "${ARCHIVE_ROOT}/Headers/." third_party/libarchive-ios/include/
-          file third_party/libarchive-ios/lib/libarchive.a
-          lipo -info third_party/libarchive-ios/lib/libarchive.a
+          echo "===== libarchive tree (depth 6) ====="
+          find third_party/libarchive -maxdepth 6 -type d -print | sort
 
+      # ============================================================
+      # 自动探测所有依赖真实路径，写入 path.env
+      # ============================================================
+      - name: Detect dependency paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WS="${GITHUB_WORKSPACE}"
+          ENV_FILE="${WS}/path.env"
+          : > "${ENV_FILE}"
+
+          echo "=================================================="
+          echo "Detect dependency paths"
+          echo "=================================================="
+
+          # ---------------- OpenSSL ----------------
+          OPENSSL_FW="$(find "${WS}/third_party/openssl" \
+            -type d -name 'OpenSSL.framework' -path '*ios-arm64*' \
+            -print -quit)"
+          if [ -z "${OPENSSL_FW}" ]; then
+            OPENSSL_FW="$(find "${WS}/third_party/openssl" \
+              -type d -name 'OpenSSL.framework' -print -quit)"
+          fi
+          if [ -z "${OPENSSL_FW}" ]; then
+            echo "ERROR: OpenSSL.framework not found"
+            find "${WS}/third_party/openssl" -maxdepth 5 -type d -print
+            exit 1
+          fi
+
+          OPENSSL_HEADERS="$(find "${OPENSSL_FW}" -type d -name 'Headers' -print -quit)"
+          if [ -z "${OPENSSL_HEADERS}" ]; then
+            echo "ERROR: OpenSSL Headers dir not found under ${OPENSSL_FW}"
+            find "${OPENSSL_FW}" -maxdepth 3 -type d -print
+            exit 1
+          fi
+
+          if ! find "${OPENSSL_HEADERS}" -type f -name 'evp.h' -print -quit | grep -q .; then
+            echo "ERROR: openssl/evp.h not found under ${OPENSSL_HEADERS}"
+            find "${OPENSSL_HEADERS}" -maxdepth 3 -type d -print
+            exit 1
+          fi
+
+          OPENSSL_SLICE="$(dirname "${OPENSSL_FW}")"
+
+          echo "OPENSSL_FW=${OPENSSL_FW}"           >> "${ENV_FILE}"
+          echo "OPENSSL_HEADERS=${OPENSSL_HEADERS}" >> "${ENV_FILE}"
+          echo "OPENSSL_SLICE=${OPENSSL_SLICE}"     >> "${ENV_FILE}"
+
+          echo "OpenSSL framework: ${OPENSSL_FW}"
+          echo "OpenSSL headers:   ${OPENSSL_HEADERS}"
+          echo "OpenSSL slice:     ${OPENSSL_SLICE}"
+
+          # ---------------- libcurl ----------------
+          CURL_LIB="$(find "${WS}/third_party/curl" \
+            -type f -name 'libcurl.a' -path '*ios-arm64*' -print -quit)"
+          if [ -z "${CURL_LIB}" ]; then
+            CURL_LIB="$(find "${WS}/third_party/curl" \
+              -type f -name 'libcurl.a' -print -quit)"
+          fi
+          if [ -z "${CURL_LIB}" ]; then
+            echo "ERROR: libcurl.a not found"
+            find "${WS}/third_party/curl" -maxdepth 8 -type f -print
+            exit 1
+          fi
+
+          CURL_INCLUDE="$(find "${WS}/third_party" \
+            -type f -name 'curl.h' -path '*/curl/*' -print -quit)"
+          if [ -z "${CURL_INCLUDE}" ]; then
+            echo "ERROR: curl.h not found"
+            find "${WS}/third_party" -maxdepth 8 -type f -name 'curl.h' -print
+            exit 1
+          fi
+          CURL_INCLUDE_DIR="$(dirname "$(dirname "${CURL_INCLUDE}")")"
+
+          echo "CURL_LIB=${CURL_LIB}"                   >> "${ENV_FILE}"
+          echo "CURL_LIB_DIR=$(dirname "${CURL_LIB}")"   >> "${ENV_FILE}"
+          echo "CURL_INCLUDE_DIR=${CURL_INCLUDE_DIR}"    >> "${ENV_FILE}"
+
+          echo "libcurl.a:        ${CURL_LIB}"
+          echo "libcurl include:  ${CURL_INCLUDE_DIR}"
+
+          # ---------------- libarchive ----------------
+          ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" \
+            -type f -name 'libarchive.a' -path '*ios-arm64*' -print -quit)"
+          if [ -z "${ARCHIVE_LIB}" ]; then
+            ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" \
+              -type f -name 'libarchive.a' -print -quit)"
+          fi
+          if [ -z "${ARCHIVE_LIB}" ]; then
+            echo "ERROR: libarchive.a not found"
+            find "${WS}/third_party/libarchive" -maxdepth 8 -type f -print
+            exit 1
+          fi
+
+          ARCHIVE_INCLUDE="$(find "${WS}/third_party/libarchive" \
+            -type f -name 'archive.h' -print -quit)"
+          if [ -z "${ARCHIVE_INCLUDE}" ]; then
+            echo "ERROR: archive.h not found"
+            find "${WS}/third_party/libarchive" -maxdepth 8 -type f -name 'archive*.h' -print
+            exit 1
+          fi
+          ARCHIVE_INCLUDE_DIR="$(dirname "${ARCHIVE_INCLUDE}")"
+
+          echo "ARCHIVE_LIB=${ARCHIVE_LIB}"                  >> "${ENV_FILE}"
+          echo "ARCHIVE_LIB_DIR=$(dirname "${ARCHIVE_LIB}")"  >> "${ENV_FILE}"
+          echo "ARCHIVE_INCLUDE_DIR=${ARCHIVE_INCLUDE_DIR}"   >> "${ENV_FILE}"
+
+          echo "libarchive.a:      ${ARCHIVE_LIB}"
+          echo "libarchive inc:    ${ARCHIVE_INCLUDE_DIR}"
+
+          # ---------------- libplist ----------------
+          PLIST_LIB="$(find "${WS}/source/libplist_lib" \
+            -type f -name 'libplist*.a' -print -quit)"
+          if [ -z "${PLIST_LIB}" ]; then
+            echo "ERROR: libplist*.a not found"
+            find "${WS}/source/libplist_lib" -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          PLIST_INCLUDE="$(find "${WS}/source/libplist_include" \
+            -type f -name 'plist.h' -print -quit)"
+          if [ -z "${PLIST_INCLUDE}" ]; then
+            echo "ERROR: plist.h not found"
+            find "${WS}/source/libplist_include" -maxdepth 3 -type f -print
+            exit 1
+          fi
+          PLIST_INCLUDE_DIR="$(dirname "${PLIST_INCLUDE}")"
+
+          echo "PLIST_LIB=${PLIST_LIB}"                      >> "${ENV_FILE}"
+          echo "PLIST_LIB_DIR=$(dirname "${PLIST_LIB}")"      >> "${ENV_FILE}"
+          echo "PLIST_INCLUDE_DIR=${PLIST_INCLUDE_DIR}"       >> "${ENV_FILE}"
+
+          echo "libplist.a:        ${PLIST_LIB}"
+          echo "libplist include:  ${PLIST_INCLUDE_DIR}"
+
+          echo "=================================================="
+          echo "path.env"
+          echo "=================================================="
+          cat "${ENV_FILE}"
+
+          # 让后续步骤可以用 env 里的变量
+          while IFS='=' read -r key value; do
+            [ -z "${key}" ] && continue
+            echo "${key}=${value}" >> "${GITHUB_ENV}"
+          done < "${ENV_FILE}"
+
+      # ============================================================
+      # 依赖验证
+      # ============================================================
       - name: Verify dependencies
         shell: bash
         run: |
           set -euo pipefail
-          OPENSSL_FRAMEWORK="${GITHUB_WORKSPACE}/third_party/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework"
-          file "${OPENSSL_FRAMEWORK}/OpenSSL"
-          lipo -info "${OPENSSL_FRAMEWORK}/OpenSSL"
-          file third_party/curl-ios/lib/libcurl.a
-          lipo -info third_party/curl-ios/lib/libcurl.a
-          file third_party/libarchive-ios/lib/libarchive.a
-          lipo -info third_party/libarchive-ios/lib/libarchive.a
-          find source/libplist_lib -maxdepth 2 -type f -print | sort
-          test -n "$(find source/libplist_lib -type f -name 'libplist*.a' -print -quit)"
+          echo "OPENSSL_FW       = ${OPENSSL_FW}"
+          echo "OPENSSL_HEADERS  = ${OPENSSL_HEADERS}"
+          echo "CURL_LIB         = ${CURL_LIB}"
+          echo "CURL_INCLUDE_DIR = ${CURL_INCLUDE_DIR}"
+          echo "ARCHIVE_LIB      = ${ARCHIVE_LIB}"
+          echo "ARCHIVE_INCLUDE_DIR = ${ARCHIVE_INCLUDE_DIR}"
+          echo "PLIST_LIB        = ${PLIST_LIB}"
+          echo "PLIST_INCLUDE_DIR= ${PLIST_INCLUDE_DIR}"
 
-      - name: Verify curl OpenSSL references
-        shell: bash
-        run: |
-          set -euo pipefail
-          CURL_LIB="third_party/curl-ios/lib/libcurl.a"
-          OPENSSL_LIB="${GITHUB_WORKSPACE}/third_party/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework/OpenSSL"
-          test -f "${CURL_LIB}"
-          test -f "${OPENSSL_LIB}"
-          nm "${OPENSSL_LIB}" 2>/dev/null | grep -E \
-            'SSL_CTX_set_srp_password|SSL_CTX_set_srp_username|UI_OpenSSL' \
-            | sort -u || true
-          nm -u "${CURL_LIB}" 2>/dev/null | grep -E \
-            'SSL_CTX_set_srp_password|SSL_CTX_set_srp_username|UI_OpenSSL' \
-            | sort -u || true
+          file "${OPENSSL_FW}/OpenSSL" || true
+          file "${CURL_LIB}"
+          file "${ARCHIVE_LIB}"
+          file "${PLIST_LIB}"
 
+      # ============================================================
+      # 生成 Theos 工程（Makefile 全部用探测出的真实路径）
+      # ============================================================
       - name: Prepare Theos project
         shell: bash
         run: |
           set -euo pipefail
+
           rm -rf theos-build
           mkdir -p theos-build
           cp source/ldid.cpp           theos-build/ldid.cpp
@@ -245,42 +349,81 @@ jobs:
           cp -R source/libplist_include theos-build/libplist_include
           cp -R source/libplist_lib     theos-build/libplist_lib
 
-          cat > theos-build/Makefile <<'EOF'
-          THEOS ?= $(CURDIR)/../theos
+          cat > theos-build/Makefile <<EOF
+          THEOS ?= ${THEOS}
           TARGET := iphone:clang:16.5:16.0
           ARCHS := arm64
           TOOL_NAME := ldid
           ldid_FILES := ldid.cpp
 
-          OPENSSL_FRAMEWORK_DIR := $(CURDIR)/../third_party/openssl/OpenSSL.xcframework/ios-arm64
+          # 自动探测到的真实路径
+          OPENSSL_FW      := ${OPENSSL_FW}
+          OPENSSL_HEADERS := ${OPENSSL_HEADERS}
+          OPENSSL_SLICE   := ${OPENSSL_SLICE}
 
-          ldid_CXXFLAGS := -std=c++20 -O3 -DNDEBUG -flto=thin \
-              -ffunction-sections -fdata-sections -fvisibility=hidden \
-              -fstrict-aliasing -Wall -Wextra
+          CURL_LIB_DIR       := ${CURL_LIB_DIR}
+          CURL_INCLUDE_DIR   := ${CURL_INCLUDE_DIR}
 
-          ldid_CPPFLAGS := -I$(CURDIR)/libplist_include \
-              -I$(OPENSSL_FRAMEWORK_DIR)/OpenSSL.framework/Headers \
-              -I$(CURDIR)/../third_party/curl-ios/include \
-              -I$(CURDIR)/../third_party/libarchive-ios/include
+          ARCHIVE_LIB_DIR     := ${ARCHIVE_LIB_DIR}
+          ARCHIVE_INCLUDE_DIR := ${ARCHIVE_INCLUDE_DIR}
 
-          ldid_LDFLAGS := -L$(CURDIR)/../third_party/curl-ios/lib \
-              -L$(CURDIR)/../third_party/libarchive-ios/lib \
-              -L$(CURDIR)/libplist_lib \
-              -F$(OPENSSL_FRAMEWORK_DIR) \
-              -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
+          PLIST_LIB_DIR       := ${PLIST_LIB_DIR}
+          PLIST_INCLUDE_DIR   := ${PLIST_INCLUDE_DIR}
 
-          ldid_LDLIBS := -lcurl -larchive -lplist \
-              -framework OpenSSL -framework Security \
-              -framework CoreFoundation -framework SystemConfiguration \
-              -framework CFNetwork -framework Foundation \
-              -liconv -lxml2 -lz -llzma -lbz2 -lc++
+          # 注意：Theos 只认 _CXXFLAGS，不认 _CPPFLAGS
+          ldid_CXXFLAGS := \\
+              -std=c++20 \\
+              -O3 \\
+              -DNDEBUG \\
+              -flto=thin \\
+              -ffunction-sections \\
+              -fdata-sections \\
+              -fvisibility=hidden \\
+              -fstrict-aliasing \\
+              -Wall \\
+              -Wextra \\
+              -I\$(PLIST_INCLUDE_DIR) \\
+              -I\$(OPENSSL_HEADERS) \\
+              -I\$(CURL_INCLUDE_DIR) \\
+              -I\$(ARCHIVE_INCLUDE_DIR)
 
-          include $(THEOS)/makefiles/common.mk
-          include $(THEOS_MAKE_PATH)/tool.mk
+          ldid_LDFLAGS := \\
+              -L\$(CURL_LIB_DIR) \\
+              -L\$(ARCHIVE_LIB_DIR) \\
+              -L\$(PLIST_LIB_DIR) \\
+              -F\$(OPENSSL_SLICE) \\
+              -Wl,-dead_strip \\
+              -Wl,-no_warn_duplicate_libraries
+
+          ldid_LDLIBS := \\
+              -lcurl \\
+              -larchive \\
+              -lplist \\
+              -framework OpenSSL \\
+              -framework Security \\
+              -framework CoreFoundation \\
+              -framework SystemConfiguration \\
+              -framework CFNetwork \\
+              -framework Foundation \\
+              -liconv \\
+              -lxml2 \\
+              -lz \\
+              -llzma \\
+              -lbz2 \\
+              -lc++
+
+          include \$(THEOS)/makefiles/common.mk
+          include \$(THEOS_MAKE_PATH)/tool.mk
           EOF
 
+          echo "=================================================="
+          echo "Theos Makefile"
+          echo "=================================================="
           cat theos-build/Makefile
 
+      # ============================================================
+      # 构建
+      # ============================================================
       - name: Build with Theos
         shell: bash
         run: |
@@ -296,6 +439,9 @@ jobs:
           cp obj/ldid "${GITHUB_WORKSPACE}/build/ldid"
           chmod 755 "${GITHUB_WORKSPACE}/build/ldid"
 
+      # ============================================================
+      # 静态验证（不运行 iOS 二进制）
+      # ============================================================
       - name: Validate final binary
         shell: bash
         run: |
@@ -307,6 +453,7 @@ jobs:
           xcrun otool -hv "${BINARY}"
           xcrun otool -l "${BINARY}" | grep -E 'LC_BUILD_VERSION|platform|minos|sdk' || true
           xcrun nm -u "${BINARY}" || true
+          echo "NOTE: iOS arm64 binary is not executed on macOS runner."
 
       - name: Check final OpenSSL linkage
         shell: bash
@@ -321,6 +468,9 @@ jobs:
           fi
           echo "OK: no OpenSSL.framework dynamic dependency."
 
+      # ============================================================
+      # 打包
+      # ============================================================
       - name: Package
         shell: bash
         run: |
