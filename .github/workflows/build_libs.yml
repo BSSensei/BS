@@ -46,9 +46,6 @@ jobs:
           make --version | head -n 1
           sysctl -n hw.logicalcpu_max
 
-      # ============================================================
-      # Helper: dump tree on failure
-      # ============================================================
       - name: Prepare source
         shell: bash
         run: |
@@ -62,9 +59,6 @@ jobs:
           test -d source/libplist_lib
           find source -maxdepth 3 -type f -print | sort
 
-      # ============================================================
-      # Theos
-      # ============================================================
       - name: Setup Theos
         shell: bash
         run: |
@@ -79,14 +73,9 @@ jobs:
             git -C "${THEOS}" submodule update --init --recursive || true
           fi
           mkdir -p "${THEOS}/vendor"
-          test -d "${THEOS}/vendor/include" || echo "WARN: vendor/include missing"
-          test -d "${THEOS}/vendor/lib"     || echo "WARN: vendor/lib missing"
           echo "THEOS=${THEOS}" >> "${GITHUB_ENV}"
           git -C "${THEOS}" rev-parse HEAD
 
-      # ============================================================
-      # iPhoneOS SDK
-      # ============================================================
       - name: Install iPhoneOS 16.5 SDK
         shell: bash
         run: |
@@ -94,23 +83,15 @@ jobs:
           SDK_DIR="${THEOS}/sdks/iPhoneOS${IOS_SDK_VERSION}.sdk"
           rm -rf "${SDK_DIR}"
           mkdir -p "${THEOS}/sdks"
-          echo "Downloading SDK..."
-          if ! curl -fL --retry 5 --retry-all-errors \
-               --connect-timeout 30 --max-time 900 \
-               "${THEOS_SDK_URL}" \
-               -o /tmp/iPhoneOS16.5.sdk.tar.xz; then
-            echo "ERROR: SDK download failed"
-            echo "URL: ${THEOS_SDK_URL}"
-            exit 1
-          fi
-          ls -lh /tmp/iPhoneOS16.5.sdk.tar.xz
+          curl -fL --retry 5 --retry-all-errors \
+            --connect-timeout 30 --max-time 900 \
+            "${THEOS_SDK_URL}" -o /tmp/iPhoneOS16.5.sdk.tar.xz
           tar -xJf /tmp/iPhoneOS16.5.sdk.tar.xz -C "${THEOS}/sdks"
           test -d "${SDK_DIR}"
           test -f "${SDK_DIR}/SDKSettings.plist"
-          /usr/libexec/PlistBuddy -c "Print :Version" "${SDK_DIR}/SDKSettings.plist" || true
 
       # ============================================================
-      # OpenSSL
+      # OpenSSL：只下载 + 检查，不 prepare
       # ============================================================
       - name: Download prebuilt OpenSSL
         shell: bash
@@ -118,59 +99,46 @@ jobs:
           set -euo pipefail
           rm -rf third_party/openssl
           mkdir -p third_party/openssl
-          echo "Downloading OpenSSL..."
-          if ! curl -fL --retry 5 --retry-all-errors \
-               --connect-timeout 30 --max-time 900 \
-               "${OPENSSL_URL}" -o /tmp/OpenSSL.xcframework.zip; then
-            echo "ERROR: OpenSSL download failed"
-            echo "URL: ${OPENSSL_URL}"
-            exit 1
-          fi
+          curl -fL --retry 5 --retry-all-errors \
+            --connect-timeout 30 --max-time 900 \
+            "${OPENSSL_URL}" -o /tmp/OpenSSL.xcframework.zip
           unzip -q -o /tmp/OpenSSL.xcframework.zip -d third_party/openssl
+
           OPENSSL_FRAMEWORK="${GITHUB_WORKSPACE}/third_party/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework"
+
           if [ ! -d "${OPENSSL_FRAMEWORK}" ]; then
             echo "ERROR: OpenSSL framework layout unexpected"
             find third_party/openssl -maxdepth 4 -type d -print
             exit 1
           fi
-          test -f "${OPENSSL_FRAMEWORK}/OpenSSL"
-          test -d "${OPENSSL_FRAMEWORK}/Headers"
+          if [ ! -f "${OPENSSL_FRAMEWORK}/OpenSSL" ]; then
+            echo "ERROR: OpenSSL binary missing"
+            ls -la "${OPENSSL_FRAMEWORK}"
+            exit 1
+          fi
+          if [ ! -d "${OPENSSL_FRAMEWORK}/Headers" ]; then
+            echo "ERROR: OpenSSL Headers missing"
+            ls -la "${OPENSSL_FRAMEWORK}"
+            exit 1
+          fi
+
           file "${OPENSSL_FRAMEWORK}/OpenSSL"
+          lipo -info "${OPENSSL_FRAMEWORK}/OpenSSL"
+          echo "OpenSSL framework: ${OPENSSL_FRAMEWORK}"
 
-      - name: Prepare OpenSSL arm64
-        shell: bash
-        run: |
-          set -euo pipefail
-          OPENSSL_FRAMEWORK="${GITHUB_WORKSPACE}/third_party/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework"
-          rm -rf third_party/openssl-ios
-          mkdir -p third_party/openssl-ios/include third_party/openssl-ios/framework
-          cp -R "${OPENSSL_FRAMEWORK}/Headers/."  third_party/openssl-ios/include/
-          cp -R "${OPENSSL_FRAMEWORK}/."          third_party/openssl-ios/framework/
-          test -f third_party/openssl-ios/framework/OpenSSL
-          test -f third_party/openssl-ios/include/openssl/opensslv.h
-          lipo -info third_party/openssl-ios/framework/OpenSSL
-
-      # ============================================================
-      # libcurl (prebuilt)
-      # ============================================================
       - name: Download prebuilt libcurl
         shell: bash
         run: |
           set -euo pipefail
           rm -rf third_party/curl
           mkdir -p third_party/curl
-          echo "Downloading libcurl..."
-          echo "URL: ${CURL_URL}"
           HTTP_CODE="$(curl -sSL -w '%{http_code}' -o /tmp/libcurl_artifact.zip "${CURL_URL}" || echo '000')"
           echo "HTTP code: ${HTTP_CODE}"
           if [ "${HTTP_CODE}" != "200" ]; then
             echo "ERROR: libcurl download failed (HTTP ${HTTP_CODE})"
-            echo "URL: ${CURL_URL}"
-            echo "请到 release 页面确认 tag 和文件名"
             exit 1
           fi
           unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
-          echo "libcurl artifact contents:"
           find third_party/curl -maxdepth 8 -type f -print | sort
 
       - name: Download curl headers
@@ -201,7 +169,7 @@ jobs:
             CURL_LIB="$(find "${CURL_ROOT}" -type f -name 'libcurl.a' -print | head -n 1)"
           fi
           if [ -z "${CURL_LIB}" ]; then
-            echo "ERROR: libcurl.a not found in artifact"
+            echo "ERROR: libcurl.a not found"
             find "${CURL_ROOT}" -maxdepth 8 -type f -print
             exit 1
           fi
@@ -209,19 +177,12 @@ jobs:
           file third_party/curl-ios/lib/libcurl.a
           lipo -info third_party/curl-ios/lib/libcurl.a
 
-      # ============================================================
-      # libarchive
-      # ============================================================
       - name: Download prebuilt libarchive
         shell: bash
         run: |
           set -euo pipefail
           rm -rf third_party/libarchive
-          if ! git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive; then
-            echo "ERROR: libarchive clone failed"
-            echo "URL: ${LIBARCHIVE_REPO}"
-            exit 1
-          fi
+          git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
           ARCHIVE_XCFRAMEWORK="$(find "${GITHUB_WORKSPACE}/third_party/libarchive" \
             -type d -iname 'libarchive*.xcframework' -print -quit)"
           if [ -z "${ARCHIVE_XCFRAMEWORK}" ]; then
@@ -244,15 +205,13 @@ jobs:
           file third_party/libarchive-ios/lib/libarchive.a
           lipo -info third_party/libarchive-ios/lib/libarchive.a
 
-      # ============================================================
-      # Verify deps
-      # ============================================================
       - name: Verify dependencies
         shell: bash
         run: |
           set -euo pipefail
-          file third_party/openssl-ios/framework/OpenSSL
-          lipo -info third_party/openssl-ios/framework/OpenSSL
+          OPENSSL_FRAMEWORK="${GITHUB_WORKSPACE}/third_party/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework"
+          file "${OPENSSL_FRAMEWORK}/OpenSSL"
+          lipo -info "${OPENSSL_FRAMEWORK}/OpenSSL"
           file third_party/curl-ios/lib/libcurl.a
           lipo -info third_party/curl-ios/lib/libcurl.a
           file third_party/libarchive-ios/lib/libarchive.a
@@ -260,17 +219,29 @@ jobs:
           find source/libplist_lib -maxdepth 2 -type f -print | sort
           test -n "$(find source/libplist_lib -type f -name 'libplist*.a' -print -quit)"
 
-      # ============================================================
-      # Theos project
-      # ============================================================
+      - name: Verify curl OpenSSL references
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURL_LIB="third_party/curl-ios/lib/libcurl.a"
+          OPENSSL_LIB="${GITHUB_WORKSPACE}/third_party/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework/OpenSSL"
+          test -f "${CURL_LIB}"
+          test -f "${OPENSSL_LIB}"
+          nm "${OPENSSL_LIB}" 2>/dev/null | grep -E \
+            'SSL_CTX_set_srp_password|SSL_CTX_set_srp_username|UI_OpenSSL' \
+            | sort -u || true
+          nm -u "${CURL_LIB}" 2>/dev/null | grep -E \
+            'SSL_CTX_set_srp_password|SSL_CTX_set_srp_username|UI_OpenSSL' \
+            | sort -u || true
+
       - name: Prepare Theos project
         shell: bash
         run: |
           set -euo pipefail
           rm -rf theos-build
           mkdir -p theos-build
-          cp source/ldid.cpp          theos-build/ldid.cpp
-          cp source/ldid.hpp          theos-build/ldid.hpp
+          cp source/ldid.cpp           theos-build/ldid.cpp
+          cp source/ldid.hpp           theos-build/ldid.hpp
           cp -R source/libplist_include theos-build/libplist_include
           cp -R source/libplist_lib     theos-build/libplist_lib
 
@@ -280,32 +251,36 @@ jobs:
           ARCHS := arm64
           TOOL_NAME := ldid
           ldid_FILES := ldid.cpp
+
+          OPENSSL_FRAMEWORK_DIR := $(CURDIR)/../third_party/openssl/OpenSSL.xcframework/ios-arm64
+
           ldid_CXXFLAGS := -std=c++20 -O3 -DNDEBUG -flto=thin \
               -ffunction-sections -fdata-sections -fvisibility=hidden \
               -fstrict-aliasing -Wall -Wextra
+
           ldid_CPPFLAGS := -I$(CURDIR)/libplist_include \
-              -I$(CURDIR)/../third_party/openssl-ios/include \
+              -I$(OPENSSL_FRAMEWORK_DIR)/OpenSSL.framework/Headers \
               -I$(CURDIR)/../third_party/curl-ios/include \
               -I$(CURDIR)/../third_party/libarchive-ios/include
+
           ldid_LDFLAGS := -L$(CURDIR)/../third_party/curl-ios/lib \
               -L$(CURDIR)/../third_party/libarchive-ios/lib \
               -L$(CURDIR)/libplist_lib \
-              -F$(CURDIR)/../third_party/openssl-ios/framework \
+              -F$(OPENSSL_FRAMEWORK_DIR) \
               -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
+
           ldid_LDLIBS := -lcurl -larchive -lplist \
               -framework OpenSSL -framework Security \
               -framework CoreFoundation -framework SystemConfiguration \
               -framework CFNetwork -framework Foundation \
               -liconv -lxml2 -lz -llzma -lbz2 -lc++
+
           include $(THEOS)/makefiles/common.mk
           include $(THEOS_MAKE_PATH)/tool.mk
           EOF
 
           cat theos-build/Makefile
 
-      # ============================================================
-      # Build
-      # ============================================================
       - name: Build with Theos
         shell: bash
         run: |
@@ -321,9 +296,6 @@ jobs:
           cp obj/ldid "${GITHUB_WORKSPACE}/build/ldid"
           chmod 755 "${GITHUB_WORKSPACE}/build/ldid"
 
-      # ============================================================
-      # Static validation (do NOT run the iOS binary)
-      # ============================================================
       - name: Validate final binary
         shell: bash
         run: |
@@ -335,7 +307,6 @@ jobs:
           xcrun otool -hv "${BINARY}"
           xcrun otool -l "${BINARY}" | grep -E 'LC_BUILD_VERSION|platform|minos|sdk' || true
           xcrun nm -u "${BINARY}" || true
-          echo "NOTE: iOS arm64 binary is not executed on macOS runner."
 
       - name: Check final OpenSSL linkage
         shell: bash
@@ -350,9 +321,6 @@ jobs:
           fi
           echo "OK: no OpenSSL.framework dynamic dependency."
 
-      # ============================================================
-      # Package
-      # ============================================================
       - name: Package
         shell: bash
         run: |
