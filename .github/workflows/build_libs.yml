@@ -89,13 +89,11 @@ jobs:
           rm -rf third_party
           mkdir -p third_party/openssl third_party/curl
 
-          # OpenSSL xcframework
           curl -fL --retry 5 --retry-all-errors \
             --connect-timeout 30 --max-time 900 \
             "${OPENSSL_URL}" -o /tmp/OpenSSL.xcframework.zip
           unzip -q -o /tmp/OpenSSL.xcframework.zip -d third_party/openssl
 
-          # libcurl artifact
           HTTP_CODE="$(curl -sSL -w '%{http_code}' -o /tmp/libcurl_artifact.zip "${CURL_URL}" || echo '000')"
           echo "HTTP code: ${HTTP_CODE}"
           if [ "${HTTP_CODE}" != "200" ]; then
@@ -104,7 +102,6 @@ jobs:
           fi
           unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
 
-          # curl headers
           rm -rf /tmp/curl-source
           mkdir -p /tmp/curl-source
           curl -fL --retry 5 --retry-all-errors \
@@ -116,12 +113,8 @@ jobs:
           cp -R /tmp/curl-source/curl-8.17.0/include/curl third_party/curl-headers/
           test -f third_party/curl-headers/curl/curl.h
 
-          # libarchive
           git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
 
-      # ============================================================
-      # libplist 头文件大小写规范化
-      # ============================================================
       - name: Normalize libplist header names
         shell: bash
         run: |
@@ -213,13 +206,22 @@ jobs:
           if [ "$(basename "${EVP_DIR}")" = "openssl" ]; then
             OPENSSL_INCLUDE_ROOT="$(dirname "${EVP_DIR}")"
           else
+            # 头文件是扁平的，建 shim；同时建 openssl/ 和 OpenSSL/ 两份，
+            # 让 <openssl/...> 和 <OpenSSL/...> 都能精确命中，避免大小写警告
             OPENSSL_INCLUDE_ROOT="${WS}/third_party/openssl-shim"
             rm -rf "${OPENSSL_INCLUDE_ROOT}"
             mkdir -p "${OPENSSL_INCLUDE_ROOT}/openssl"
-            cp -R "${EVP_DIR}/"* "${OPENSSL_INCLUDE_ROOT}/openssl/" 2>/dev/null || true
+            mkdir -p "${OPENSSL_INCLUDE_ROOT}/OpenSSL"
+            cp -R "${EVP_DIR}/." "${OPENSSL_INCLUDE_ROOT}/openssl/" 2>/dev/null || true
+            cp -R "${EVP_DIR}/." "${OPENSSL_INCLUDE_ROOT}/OpenSSL/" 2>/dev/null || true
           fi
 
           test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
+
+          echo "===== OpenSSL include root ====="
+          find "${OPENSSL_INCLUDE_ROOT}" -maxdepth 2 -type d -print | sort
+          echo "openssl/evp.h      exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h" && echo yes || echo no)"
+          echo "OpenSSL/evp.h      exists: $(test -f "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h" && echo yes || echo no)"
 
           # ---------------- libcurl ----------------
           CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' -path '*ios-arm64*' -print -quit)"
@@ -310,7 +312,6 @@ jobs:
           cp -R source/libplist_include theos-build/libplist_include
           cp -R source/libplist_lib     theos-build/libplist_lib
 
-          # 二次规范化
           find theos-build/libplist_include -type f -name '*.h'   -print > /tmp/hdrs2.txt
           find theos-build/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs2.txt
 
@@ -323,9 +324,6 @@ jobs:
               cp "${f}" "${dir}/${lower}"
             fi
           done < /tmp/hdrs2.txt
-
-          echo "===== theos-build/libplist_include ====="
-          find theos-build/libplist_include -type f -print | sort
 
           test -f theos-build/libplist_include/plist/string.h
           test -f theos-build/libplist_include/plist/Node.h
@@ -348,7 +346,7 @@ jobs:
           PLIST_INCLUDE_DIR := ${PLIST_INCLUDE_DIR}
 
           LDID_INC := -I\$(PLIST_INCLUDE_DIR) -I\$(OPENSSL_INCLUDE_ROOT) -I\$(CURL_INCLUDE_DIR) -I\$(ARCHIVE_INCLUDE_DIR)
-          LDID_OPT := -std=c++20 -O3 -DNDEBUG -fstrict-aliasing -fvectorize -fslp-vectorize -ffunction-sections -fdata-sections -fvisibility=hidden
+          LDID_OPT := -std=c++20 -O3 -DNDEBUG -fstrict-aliasing -fvectorize -fslp-vectorize -ffunction-sections -fdata-sections -fvisibility=hidden -Wno-nonportable-include-path -Wno-error=nonportable-include-path
           LDID_LDF := -L\$(CURL_LIB_DIR) -L\$(ARCHIVE_LIB_DIR) -L\$(PLIST_LIB_DIR) -F\$(OPENSSL_SLICE) -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries
           LDID_LIBS := -lcurl -larchive -lplist -framework OpenSSL -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation -liconv -lxml2 -lz -llzma -lbz2
 
@@ -380,17 +378,17 @@ jobs:
           cat theos-build/Makefile
 
           echo
-          echo "OpenSSL evp.h exists:"
+          echo "OpenSSL evp.h (openssl/):"
           test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
           echo "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
 
           echo
-          echo "libplist Node.h exists:"
-          test -f "${PLIST_INCLUDE_DIR}/plist/Node.h"
-          echo "${PLIST_INCLUDE_DIR}/plist/Node.h"
+          echo "OpenSSL evp.h (OpenSSL/):"
+          test -f "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h"
+          echo "${OPENSSL_INCLUDE_ROOT}/OpenSSL/evp.h"
 
           echo
-          echo "libplist string.h exists:"
+          echo "libplist string.h:"
           test -f "${PLIST_INCLUDE_DIR}/plist/string.h"
           echo "${PLIST_INCLUDE_DIR}/plist/string.h"
 
