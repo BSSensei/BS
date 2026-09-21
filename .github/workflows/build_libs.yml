@@ -22,18 +22,29 @@ env:
   IOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
 
   CURL_URL: "https://github.com/XDcobra/libcurl-ios-prebuilt-and-buildscripts/releases/download/curl-8_17_0/libcurl_artifact.zip"
-
   CURL_VERSION: "8.17.0"
 
   LIBARCHIVE_REPO: "https://github.com/okferret/libarchive.git"
 
+
 jobs:
   build-ios:
+    name: Build ldid - iOS arm64
     runs-on: macos-14
 
     steps:
+
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+
       - name: Checkout
         uses: actions/checkout@v4
+
+
+      # ------------------------------------------------------------
+      # Extract ldid source
+      # ------------------------------------------------------------
 
       - name: Prepare source
         shell: bash
@@ -45,6 +56,17 @@ jobs:
 
           unzip -q ldid.zip -d source
 
+          test -f source/ldid.cpp
+          test -f source/ldid.hpp
+
+          echo "Source:"
+          find source -maxdepth 2 -type f | sort
+
+
+      # ------------------------------------------------------------
+      # Host tools
+      # ------------------------------------------------------------
+
       - name: Install tools
         shell: bash
         run: |
@@ -52,12 +74,17 @@ jobs:
 
           brew install xz
 
+
+      # ------------------------------------------------------------
+      # iPhoneOS SDK
+      # ------------------------------------------------------------
+
       - name: Download iPhoneOS SDK
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf third_party
+          rm -rf third_party/sdk
           mkdir -p third_party/sdk
 
           curl \
@@ -84,7 +111,19 @@ jobs:
               -quit
           )"
 
+          if [ -z "${SDKROOT}" ]; then
+            echo "ERROR: iPhoneOS16.5.sdk was not found"
+            exit 1
+          fi
+
           echo "SDKROOT=${SDKROOT}" >> "${GITHUB_ENV}"
+
+          echo "SDKROOT=${SDKROOT}"
+
+
+      # ------------------------------------------------------------
+      # Locate bundled OpenSSL
+      # ------------------------------------------------------------
 
       - name: Locate bundled OpenSSL
         shell: bash
@@ -114,8 +153,31 @@ jobs:
             )"
           fi
 
+          if [ -z "${OPENSSL_LIB_DIR}" ] ||
+             [ ! -d "${OPENSSL_LIB_DIR}" ]; then
+            echo "ERROR: openssl_lib not found"
+            exit 1
+          fi
+
+          if [ -z "${OPENSSL_INCLUDE_DIR}" ] ||
+             [ ! -d "${OPENSSL_INCLUDE_DIR}" ]; then
+            echo "ERROR: openssl_include not found"
+            exit 1
+          fi
+
+          test -f "${OPENSSL_LIB_DIR}/libssl.a"
+          test -f "${OPENSSL_LIB_DIR}/libcrypto.a"
+
           echo "OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR}" >> "${GITHUB_ENV}"
           echo "OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}" >> "${GITHUB_ENV}"
+
+          echo "OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR}"
+          echo "OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}"
+
+
+      # ------------------------------------------------------------
+      # Locate bundled libplist
+      # ------------------------------------------------------------
 
       - name: Locate bundled libplist
         shell: bash
@@ -145,8 +207,34 @@ jobs:
             )"
           fi
 
+          if [ -z "${PLIST_LIB_DIR}" ] ||
+             [ ! -d "${PLIST_LIB_DIR}" ]; then
+            echo "ERROR: libplist_lib not found"
+            exit 1
+          fi
+
+          if [ -z "${PLIST_INCLUDE_DIR}" ] ||
+             [ ! -d "${PLIST_INCLUDE_DIR}" ]; then
+            echo "ERROR: libplist_include not found"
+            exit 1
+          fi
+
+          test -f "${PLIST_LIB_DIR}/libplist.a"
+          test -f "${PLIST_INCLUDE_DIR}/plist/plist.h"
+
           echo "PLIST_LIB_DIR=${PLIST_LIB_DIR}" >> "${GITHUB_ENV}"
           echo "PLIST_INCLUDE_DIR=${PLIST_INCLUDE_DIR}" >> "${GITHUB_ENV}"
+
+          echo "PLIST_LIB_DIR=${PLIST_LIB_DIR}"
+          echo "PLIST_INCLUDE_DIR=${PLIST_INCLUDE_DIR}"
+
+
+      # ------------------------------------------------------------
+      # iOS compatibility patch
+      #
+      # verify_with_apple_system() uses macOS Security.framework.
+      # It must not be compiled as an active implementation on iOS.
+      # ------------------------------------------------------------
 
       - name: Patch macOS-only Security API
         shell: bash
@@ -159,6 +247,7 @@ jobs:
           path = Path("source/ldid.cpp")
           text = path.read_text()
 
+          # Add TargetConditionals.h if it is not already included.
           if "#include <TargetConditionals.h>" not in text:
               text = "#include <TargetConditionals.h>\n" + text
 
@@ -176,11 +265,28 @@ jobs:
           path.write_text(text)
           PY
 
+          grep -n \
+            -A3 \
+            -B2 \
+            "verify_with_apple_system" \
+            source/ldid.cpp || true
+
+
+      # ------------------------------------------------------------
+      # Prebuilt libcurl
+      #
+      # IMPORTANT:
+      # Do NOT use gh release download.
+      # Do NOT build curl.
+      # Do NOT assume the artifact contains headers.
+      # ------------------------------------------------------------
+
       - name: Download prebuilt libcurl
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf third_party/curl
           mkdir -p third_party/curl
 
           curl \
@@ -201,6 +307,12 @@ jobs:
             third_party/curl/libcurl_artifact.zip \
             -d third_party/curl/extracted
 
+          echo "libcurl artifact contents:"
+          find third_party/curl/extracted \
+            -maxdepth 6 \
+            -type f \
+            -print | sort
+
           CURL_A="$(
             find third_party/curl/extracted \
               -type f \
@@ -219,22 +331,31 @@ jobs:
             )"
           fi
 
-          CURL_HEADERS="$(
-            find third_party/curl/extracted \
-              -type d \
-              -path "*/ios-arm64/Headers" \
-              -print \
-              -quit
-          )"
+          if [ -z "${CURL_A}" ]; then
+            echo "ERROR: prebuilt libcurl.a not found"
+            exit 1
+          fi
+
+          test -f "${CURL_A}"
 
           echo "CURL_A=${CURL_A}" >> "${GITHUB_ENV}"
-          echo "CURL_HEADERS=${CURL_HEADERS}" >> "${GITHUB_ENV}"
 
-      - name: Download curl source headers
+          echo "CURL_A=${CURL_A}"
+
+
+      # ------------------------------------------------------------
+      # Curl headers only
+      #
+      # libcurl itself is NOT compiled here.
+      # Headers come from the official curl source tarball.
+      # ------------------------------------------------------------
+
+      - name: Download curl headers
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf third_party/curl-source
           mkdir -p third_party/curl-source
 
           curl \
@@ -255,7 +376,26 @@ jobs:
 
           CURL_SOURCE="third_party/curl-source/curl-${CURL_VERSION}"
 
+          if [ ! -d "${CURL_SOURCE}/include/curl" ]; then
+            echo "ERROR: curl headers not found"
+            exit 1
+          fi
+
+          test -f "${CURL_SOURCE}/include/curl/curl.h"
+
           echo "CURL_SOURCE=${CURL_SOURCE}" >> "${GITHUB_ENV}"
+
+          echo "CURL_SOURCE=${CURL_SOURCE}"
+
+
+      # ------------------------------------------------------------
+      # Prebuilt libarchive
+      #
+      # okferret/libarchive contains a committed prebuilt
+      # libArchive.xcframework.
+      #
+      # No libarchive source compilation.
+      # ------------------------------------------------------------
 
       - name: Download prebuilt libarchive
         shell: bash
@@ -277,6 +417,11 @@ jobs:
               -quit
           )"
 
+          if [ -z "${LIBARCHIVE_XCFRAMEWORK}" ]; then
+            echo "ERROR: libArchive.xcframework not found"
+            exit 1
+          fi
+
           LIBARCHIVE_A="$(
             find "${LIBARCHIVE_XCFRAMEWORK}" \
               -type f \
@@ -284,6 +429,11 @@ jobs:
               -print \
               -quit
           )"
+
+          if [ -z "${LIBARCHIVE_A}" ]; then
+            echo "ERROR: iOS arm64 libarchive.a not found"
+            exit 1
+          fi
 
           LIBARCHIVE_HEADERS="$(
             find "${LIBARCHIVE_XCFRAMEWORK}" \
@@ -293,9 +443,60 @@ jobs:
               -quit
           )"
 
+          if [ -z "${LIBARCHIVE_HEADERS}" ]; then
+            echo "ERROR: iOS arm64 libarchive Headers not found"
+            exit 1
+          fi
+
+          test -f "${LIBARCHIVE_A}"
+          test -f "${LIBARCHIVE_HEADERS}/archive.h"
+
           echo "LIBARCHIVE_XCFRAMEWORK=${LIBARCHIVE_XCFRAMEWORK}" >> "${GITHUB_ENV}"
           echo "LIBARCHIVE_A=${LIBARCHIVE_A}" >> "${GITHUB_ENV}"
           echo "LIBARCHIVE_HEADERS=${LIBARCHIVE_HEADERS}" >> "${GITHUB_ENV}"
+
+          echo "LIBARCHIVE_XCFRAMEWORK=${LIBARCHIVE_XCFRAMEWORK}"
+          echo "LIBARCHIVE_A=${LIBARCHIVE_A}"
+          echo "LIBARCHIVE_HEADERS=${LIBARCHIVE_HEADERS}"
+
+
+      # ------------------------------------------------------------
+      # Validate architecture of prebuilt libraries
+      # ------------------------------------------------------------
+
+      - name: Validate prebuilt libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== libcurl ==="
+          file "${CURL_A}"
+          lipo -info "${CURL_A}" || true
+
+          echo
+          echo "=== libarchive ==="
+          file "${LIBARCHIVE_A}"
+          lipo -info "${LIBARCHIVE_A}" || true
+
+          echo
+          echo "=== libplist ==="
+          file "${PLIST_LIB_DIR}/libplist.a"
+          lipo -info "${PLIST_LIB_DIR}/libplist.a" || true
+
+          echo
+          echo "=== libssl ==="
+          file "${OPENSSL_LIB_DIR}/libssl.a"
+          lipo -info "${OPENSSL_LIB_DIR}/libssl.a" || true
+
+          echo
+          echo "=== libcrypto ==="
+          file "${OPENSSL_LIB_DIR}/libcrypto.a"
+          lipo -info "${OPENSSL_LIB_DIR}/libcrypto.a" || true
+
+
+      # ------------------------------------------------------------
+      # Build
+      # ------------------------------------------------------------
 
       - name: Build ldid
         shell: bash
@@ -303,39 +504,66 @@ jobs:
           set -euo pipefail
 
           CLANGXX="$(xcrun --sdk iphoneos --find clang++)"
+          STRIP="$(xcrun --sdk iphoneos --find strip)"
 
           TARGET="arm64-apple-ios${IOS_DEPLOYMENT_TARGET}"
 
           mkdir -p build
 
-          "${CLANGXX}" \
-            -target "${TARGET}" \
-            -isysroot "${SDKROOT}" \
-            "-miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
-            -O3 \
-            -DNDEBUG \
-            -flto=thin \
-            -ffunction-sections \
-            -fdata-sections \
-            -fvisibility=hidden \
-            -fstrict-aliasing \
-            -Wall \
-            -Wextra \
-            -Wpedantic \
-            -Werror \
-            "-I${OPENSSL_INCLUDE_DIR}" \
-            "-I${PLIST_INCLUDE_DIR}" \
-            "-I${LIBARCHIVE_HEADERS}" \
-            "-I${CURL_HEADERS}" \
-            "-I${CURL_SOURCE}/include" \
-            -c \
-            source/ldid.cpp \
-            -o build/ldid.o
+          echo "Compiler: ${CLANGXX}"
+          "${CLANGXX}" --version
+
+          echo
+          echo "Target: ${TARGET}"
+          echo "SDKROOT: ${SDKROOT}"
+          echo "Deployment target: ${IOS_DEPLOYMENT_TARGET}"
+
+          CXXFLAGS=(
+            -std=c++20
+
+            -O3
+            -DNDEBUG
+
+            -flto=thin
+
+            -ffunction-sections
+            -fdata-sections
+            -fvisibility=hidden
+            -fstrict-aliasing
+
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Werror
+          )
+
+          INCLUDES=(
+            "-I${OPENSSL_INCLUDE_DIR}"
+            "-I${PLIST_INCLUDE_DIR}"
+            "-I${LIBARCHIVE_HEADERS}"
+            "-I${CURL_SOURCE}/include"
+          )
+
+          echo
+          echo "=== Compile ==="
 
           "${CLANGXX}" \
             -target "${TARGET}" \
             -isysroot "${SDKROOT}" \
             "-miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
+            "${CXXFLAGS[@]}" \
+            "${INCLUDES[@]}" \
+            -c source/ldid.cpp \
+            -o build/ldid.o
+
+          echo
+          echo "=== Link ==="
+
+          "${CLANGXX}" \
+            -target "${TARGET}" \
+            -isysroot "${SDKROOT}" \
+            "-miphoneos-version-min=${IOS_DEPLOYMENT_TARGET}" \
+            -std=c++20 \
             -flto=thin \
             -Wl,-dead_strip \
             build/ldid.o \
@@ -357,6 +585,17 @@ jobs:
 
           chmod +x build/ldid
 
+          echo
+          echo "=== Built binary ==="
+          file build/ldid
+          lipo -info build/ldid
+          size build/ldid
+
+
+      # ------------------------------------------------------------
+      # Preserve unstripped binary
+      # ------------------------------------------------------------
+
       - name: Preserve unstripped binary
         shell: bash
         run: |
@@ -365,6 +604,13 @@ jobs:
           cp \
             build/ldid \
             build/ldid.unstripped
+
+          test -f build/ldid.unstripped
+
+
+      # ------------------------------------------------------------
+      # Strip release binary
+      # ------------------------------------------------------------
 
       - name: Strip binary
         shell: bash
@@ -377,11 +623,58 @@ jobs:
             -S \
             build/ldid
 
+          chmod +x build/ldid
+
+          echo "=== Stripped binary ==="
+          file build/ldid
+          lipo -info build/ldid
+          size build/ldid
+
+
+      # ------------------------------------------------------------
+      # Basic binary validation
+      # ------------------------------------------------------------
+
+      - name: Validate final binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -x build/ldid
+          test -x build/ldid.unstripped
+
+          file build/ldid
+          file build/ldid.unstripped
+
+          lipo -info build/ldid
+          lipo -info build/ldid.unstripped
+
+          echo
+          echo "=== Mach-O header ==="
+          xcrun --sdk iphoneos \
+            otool -hv \
+            build/ldid
+
+          echo
+          echo "=== Load commands ==="
+          xcrun --sdk iphoneos \
+            otool -l \
+            build/ldid \
+            | grep -E \
+              "LC_BUILD_VERSION|platform IOS|minos|sdk" \
+              || true
+
+
+      # ------------------------------------------------------------
+      # Package source
+      # ------------------------------------------------------------
+
       - name: Package source
         shell: bash
         run: |
           set -euo pipefail
 
+          rm -rf release
           mkdir -p release/source
 
           cp \
@@ -390,18 +683,22 @@ jobs:
             release/source/
 
           tar \
-            -czf \
-            release/ldid-source.tar.gz \
+            -czf release/ldid-source.tar.gz \
             -C source \
             ldid.cpp \
             ldid.hpp
+
+          test -f release/ldid-source.tar.gz
+
+
+      # ------------------------------------------------------------
+      # Package release
+      # ------------------------------------------------------------
 
       - name: Package release
         shell: bash
         run: |
           set -euo pipefail
-
-          mkdir -p release
 
           cp \
             build/ldid \
@@ -416,6 +713,19 @@ jobs:
             release/ldid-ios-arm64.unstripped \
             release/ldid-source.tar.gz \
             > release/SHA256SUMS
+
+          echo
+          echo "=== Release files ==="
+          ls -lh release
+
+          echo
+          echo "=== SHA256 ==="
+          cat release/SHA256SUMS
+
+
+      # ------------------------------------------------------------
+      # Upload
+      # ------------------------------------------------------------
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
