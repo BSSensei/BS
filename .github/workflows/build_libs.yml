@@ -56,9 +56,6 @@ jobs:
           test -d source/openssl_lib
           test -f source/openssl_lib/libcrypto.a
           test -f source/openssl_lib/libssl.a
-          file source/openssl_lib/libcrypto.a
-          file source/openssl_lib/libssl.a
-          file source/libplist_lib/libplist-2.0.a
 
       - name: Setup Theos and iOS SDK
         shell: bash
@@ -77,7 +74,14 @@ jobs:
           test -d "${SDK_DIR}"
           test -f "${SDK_DIR}/SDKSettings.plist"
           echo "THEOS=${THEOS}" >> "${GITHUB_ENV}"
-          git -C "${THEOS}" rev-parse HEAD
+
+      - name: Install ldid for codesigning
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ldid 2>/dev/null || brew upgrade ldid 2>/dev/null || true
+          which ldid
+          ldid -h 2>&1 | head -n 2 || true
 
       - name: Download libcurl + headers + libarchive
         shell: bash
@@ -93,7 +97,6 @@ jobs:
             exit 1
           fi
           unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
-          find third_party/curl -maxdepth 4 -type d -print | sort
 
           rm -rf /tmp/curl-source
           mkdir -p /tmp/curl-source
@@ -105,7 +108,6 @@ jobs:
           test -f third_party/curl-headers/curl/curl.h
 
           git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
-          find third_party/libarchive -maxdepth 5 -type d -print | sort
 
       - name: Normalize libplist header names
         shell: bash
@@ -123,8 +125,6 @@ jobs:
             fi
           done < /tmp/hdrs.txt
           test -f source/libplist_include/plist/string.h
-          test -f source/libplist_include/plist/Node.h
-          test -f source/libplist_include/plist/plist.h
 
       - name: Detect dependency paths
         shell: bash
@@ -140,23 +140,15 @@ jobs:
           test -f "${OPENSSL_LIBSSL}"
 
           CURL_LIB="$(find "${WS}/third_party/curl" -type f -path '*/ios-arm64/libcurl.a' -print -quit)"
-          if [ -z "${CURL_LIB}" ]; then
-            CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' ! -path '*simulator*' -print -quit)"
-          fi
-          if [ -z "${CURL_LIB}" ]; then
-            CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' -print -quit)"
-          fi
+          [ -z "${CURL_LIB}" ] && CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' ! -path '*simulator*' -print -quit)"
+          [ -z "${CURL_LIB}" ] && CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' -print -quit)"
           test -n "${CURL_LIB}"
           CURL_INCLUDE_DIR="${WS}/third_party/curl-headers"
           test -f "${CURL_INCLUDE_DIR}/curl/curl.h"
 
           ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -path '*/ios-arm64/libarchive.a' -print -quit)"
-          if [ -z "${ARCHIVE_LIB}" ]; then
-            ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' ! -path '*simulator*' -print -quit)"
-          fi
-          if [ -z "${ARCHIVE_LIB}" ]; then
-            ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' -print -quit)"
-          fi
+          [ -z "${ARCHIVE_LIB}" ] && ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' ! -path '*simulator*' -print -quit)"
+          [ -z "${ARCHIVE_LIB}" ] && ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' -print -quit)"
           test -n "${ARCHIVE_LIB}"
           ARCHIVE_INCLUDE="$(find "${WS}/third_party/libarchive" -type f -name 'archive.h' -print -quit)"
           ARCHIVE_INCLUDE_DIR="$(dirname "${ARCHIVE_INCLUDE}")"
@@ -165,25 +157,6 @@ jobs:
           PLIST_INCLUDE_DIR="${WS}/source/libplist_include"
           PLIST_LIB="${WS}/source/libplist_lib/libplist-2.0.a"
           test -f "${PLIST_LIB}"
-          test -f "${PLIST_INCLUDE_DIR}/plist/plist.h"
-          test -f "${PLIST_INCLUDE_DIR}/plist/string.h"
-
-          echo "===== Detected ====="
-          echo "OPENSSL_INCLUDE_ROOT = ${OPENSSL_INCLUDE_ROOT}"
-          echo "OPENSSL_LIBCRYPTO     = ${OPENSSL_LIBCRYPTO}"
-          echo "OPENSSL_LIBSSL        = ${OPENSSL_LIBSSL}"
-          echo "CURL_LIB              = ${CURL_LIB}"
-          echo "CURL_INCLUDE_DIR      = ${CURL_INCLUDE_DIR}"
-          echo "ARCHIVE_LIB           = ${ARCHIVE_LIB}"
-          echo "ARCHIVE_INCLUDE_DIR   = ${ARCHIVE_INCLUDE_DIR}"
-          echo "PLIST_LIB             = ${PLIST_LIB}"
-          echo "PLIST_INCLUDE_DIR     = ${PLIST_INCLUDE_DIR}"
-
-          file "${OPENSSL_LIBCRYPTO}" || true
-          file "${OPENSSL_LIBSSL}" || true
-          file "${CURL_LIB}" || true
-          file "${ARCHIVE_LIB}" || true
-          file "${PLIST_LIB}" || true
 
           {
             echo "OPENSSL_INCLUDE_ROOT=${OPENSSL_INCLUDE_ROOT}"
@@ -196,6 +169,9 @@ jobs:
             echo "PLIST_LIB=${PLIST_LIB}"
             echo "PLIST_INCLUDE_DIR=${PLIST_INCLUDE_DIR}"
           } >> "${GITHUB_ENV}"
+
+          echo "===== Detected ====="
+          grep -E '^(OPENSSL_|CURL_|ARCHIVE_|PLIST_)' "${GITHUB_ENV}" || true
 
       - name: Prepare Theos project
         shell: bash
@@ -219,7 +195,6 @@ jobs:
               cp "${f}" "${dir}/${lower}"
             fi
           done < /tmp/hdrs2.txt
-          test -f theos-build/libplist_include/plist/string.h
 
           cat > theos-build/Makefile <<EOF
           THEOS ?= ${THEOS}
@@ -234,7 +209,7 @@ jobs:
           LDID_SYSLIBS := -lz -lbz2 -liconv -lxml2
           LDID_WEAK := -Wl,-U,_SSL_CTX_set_srp_password -Wl,-U,_SSL_CTX_set_srp_username -Wl,-U,_UI_OpenSSL
 
-          LDID_LDF := -Wl,-dead_strip \$(LDID_LIBS) \$(LDID_FRAMEWORKS) \$(LDID_SYSLIBS) \$(LDID_WEAK)
+          LDID_LDF := -Wl,-dead_strip \$(LDID_LIBS) \$(LDID_FRAMEWORKS) \$(LDID_SYSLIBS) \$(LDID_WEAK) -Wl,-undefined,error -Wl,-no_warn_duplicate_libraries
 
           CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
           CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
@@ -247,7 +222,6 @@ jobs:
           include \$(THEOS_MAKE_PATH)/tool.mk
           EOF
 
-          echo "===== Makefile ====="
           cat theos-build/Makefile
 
       - name: Build with Theos
@@ -274,16 +248,8 @@ jobs:
           tail -n 200 /tmp/theos-build.log
 
           echo
-          echo "===== Error lines ====="
-          grep -nE 'error:|Error [0-9]|No such file|not found|undefined|Undefined|ld: ' /tmp/theos-build.log | head -n 60 || true
-
-          echo
-          echo "===== Full Undefined symbols ====="
-          awk '/Undefined symbols/,/symbol\(s\) not found/' /tmp/theos-build.log || true
-
-          echo
-          echo "===== Linker invocation ====="
-          grep -nE 'clang(\+\+)? .*ldid' /tmp/theos-build.log | tail -n 3 || true
+          echo "===== Warnings / Errors ====="
+          grep -nE 'warning:|error:|Error [0-9]|ld: ' /tmp/theos-build.log | head -n 60 || true
 
           echo
           echo "===== Find built ldid ====="
