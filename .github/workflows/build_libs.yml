@@ -56,6 +56,9 @@ jobs:
           test -d source/openssl_lib
           test -f source/openssl_lib/libcrypto.a
           test -f source/openssl_lib/libssl.a
+          file source/openssl_lib/libcrypto.a
+          file source/openssl_lib/libssl.a
+          file source/libplist_lib/libplist-2.0.a
 
       - name: Setup Theos and iOS SDK
         shell: bash
