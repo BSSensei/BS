@@ -231,20 +231,14 @@ jobs:
           LDID_INC := -I${PLIST_INCLUDE_DIR} -I${OPENSSL_INCLUDE_ROOT} -I${CURL_INCLUDE_DIR} -I${ARCHIVE_INCLUDE_DIR}
           LDID_LIBS := -Wl,-force_load,${OPENSSL_LIBSSL} -Wl,-force_load,${OPENSSL_LIBCRYPTO} -Wl,-force_load,${PLIST_LIB} -Wl,-force_load,${CURL_LIB} -Wl,-force_load,${ARCHIVE_LIB}
           LDID_FRAMEWORKS := -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation
-          LDID_SYSLIBS := -lz -liconv -lxml2
-          LDID_LDF := -Wl,-dead_strip \$(LDID_LIBS) \$(LDID_FRAMEWORKS) \$(LDID_SYSLIBS)
+          LDID_SYSLIBS := -lz -lbz2 -liconv -lxml2
+          LDID_WEAK := -Wl,-U,_SSL_CTX_set_srp_password -Wl,-U,_SSL_CTX_set_srp_username -Wl,-U,_UI_OpenSSL
 
-          ADDITIONAL_CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
-          ADDITIONAL_CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
-          ADDITIONAL_LDFLAGS += \$(LDID_LDF)
+          LDID_LDF := -Wl,-dead_strip \$(LDID_LIBS) \$(LDID_FRAMEWORKS) \$(LDID_SYSLIBS) \$(LDID_WEAK)
 
           CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
           CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
           LDFLAGS += \$(LDID_LDF)
-
-          ldid_CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
-          ldid_CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
-          ldid_LDFLAGS += \$(LDID_LDF)
 
           DEBUG := 0
           FINALPACKAGE := 1
@@ -282,6 +276,10 @@ jobs:
           echo
           echo "===== Error lines ====="
           grep -nE 'error:|Error [0-9]|No such file|not found|undefined|Undefined|ld: ' /tmp/theos-build.log | head -n 60 || true
+
+          echo
+          echo "===== Full Undefined symbols ====="
+          awk '/Undefined symbols/,/symbol\(s\) not found/' /tmp/theos-build.log || true
 
           echo
           echo "===== Linker invocation ====="
