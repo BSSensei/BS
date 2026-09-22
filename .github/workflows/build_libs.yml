@@ -56,14 +56,9 @@ jobs:
           test -d source/openssl_lib
           test -f source/openssl_lib/libcrypto.a
           test -f source/openssl_lib/libssl.a
-          echo "openssl libs:"
           file source/openssl_lib/libcrypto.a
           file source/openssl_lib/libssl.a
-          lipo -info source/openssl_lib/libcrypto.a || true
-          lipo -info source/openssl_lib/libssl.a || true
-          echo "libplist libs:"
-          file source/libplist_lib/*.a
-          lipo -info source/libplist_lib/libplist-2.0.a || true
+          file source/libplist_lib/libplist-2.0.a
 
       - name: Setup Theos and iOS SDK
         shell: bash
@@ -91,7 +86,6 @@ jobs:
           rm -rf third_party
           mkdir -p third_party/curl
 
-          # libcurl prebuilt
           HTTP_CODE="$(curl -sSL -w '%{http_code}' -o /tmp/libcurl_artifact.zip "${CURL_URL}" || echo '000')"
           echo "curl HTTP code: ${HTTP_CODE}"
           if [ "${HTTP_CODE}" != "200" ]; then
@@ -101,7 +95,6 @@ jobs:
           unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
           find third_party/curl -maxdepth 4 -type d -print | sort
 
-          # curl headers only
           rm -rf /tmp/curl-source
           mkdir -p /tmp/curl-source
           curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
@@ -111,7 +104,6 @@ jobs:
           cp -R /tmp/curl-source/curl-8.17.0/include/curl third_party/curl-headers/
           test -f third_party/curl-headers/curl/curl.h
 
-          # libarchive prebuilt
           git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
           find third_party/libarchive -maxdepth 5 -type d -print | sort
 
@@ -119,8 +111,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # 为所有大写 .h 生成小写副本，避免 <plist/string.h> 找不到
-          find source/libplist_include -type f -name '*.h' -print > /tmp/hdrs.txt
+          find source/libplist_include -type f -name '*.h'   -print > /tmp/hdrs.txt
           find source/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs.txt
           while IFS= read -r f; do
             [ -z "$f" ] && continue
@@ -141,7 +132,6 @@ jobs:
           set -euo pipefail
           WS="${GITHUB_WORKSPACE}"
 
-          # ---- OpenSSL: 使用 source/openssl_* (zip 自带，静态) ----
           OPENSSL_INCLUDE_ROOT="${WS}/source/openssl_include"
           OPENSSL_LIBCRYPTO="${WS}/source/openssl_lib/libcrypto.a"
           OPENSSL_LIBSSL="${WS}/source/openssl_lib/libssl.a"
@@ -149,7 +139,6 @@ jobs:
           test -f "${OPENSSL_LIBCRYPTO}"
           test -f "${OPENSSL_LIBSSL}"
 
-          # ---- libcurl: 精确选择 device slice ----
           CURL_LIB="$(find "${WS}/third_party/curl" -type f -path '*/ios-arm64/libcurl.a' -print -quit)"
           if [ -z "${CURL_LIB}" ]; then
             CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' ! -path '*simulator*' -print -quit)"
@@ -161,7 +150,6 @@ jobs:
           CURL_INCLUDE_DIR="${WS}/third_party/curl-headers"
           test -f "${CURL_INCLUDE_DIR}/curl/curl.h"
 
-          # ---- libarchive: 精确选择 device slice ----
           ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -path '*/ios-arm64/libarchive.a' -print -quit)"
           if [ -z "${ARCHIVE_LIB}" ]; then
             ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' ! -path '*simulator*' -print -quit)"
@@ -170,10 +158,10 @@ jobs:
             ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' -print -quit)"
           fi
           test -n "${ARCHIVE_LIB}"
-          ARCHIVE_INCLUDE_DIR="$(dirname "$(find "${WS}/third_party/libarchive" -type f -name 'archive.h' -print -quit)")"
+          ARCHIVE_INCLUDE="$(find "${WS}/third_party/libarchive" -type f -name 'archive.h' -print -quit)"
+          ARCHIVE_INCLUDE_DIR="$(dirname "${ARCHIVE_INCLUDE}")"
           test -f "${ARCHIVE_INCLUDE_DIR}/archive.h"
 
-          # ---- libplist ----
           PLIST_INCLUDE_DIR="${WS}/source/libplist_include"
           PLIST_LIB="${WS}/source/libplist_lib/libplist-2.0.a"
           test -f "${PLIST_LIB}"
@@ -220,7 +208,6 @@ jobs:
           cp -R source/libplist_include theos-build/libplist_include
           cp -R source/libplist_lib     theos-build/libplist_lib
 
-          # 二次规范化
           find theos-build/libplist_include -type f -name '*.h'   -print > /tmp/hdrs2.txt
           find theos-build/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs2.txt
           while IFS= read -r f; do
@@ -242,39 +229,21 @@ jobs:
           ldid_FILES := ldid.cpp
 
           LDID_INC := -I${PLIST_INCLUDE_DIR} -I${OPENSSL_INCLUDE_ROOT} -I${CURL_INCLUDE_DIR} -I${ARCHIVE_INCLUDE_DIR}
-          LDID_CXXOPT := -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-nonportable-include-path -Wno-error=nonportable-include-path
+          LDID_LIBS := -Wl,-force_load,${OPENSSL_LIBSSL} -Wl,-force_load,${OPENSSL_LIBCRYPTO} -Wl,-force_load,${PLIST_LIB} -Wl,-force_load,${CURL_LIB} -Wl,-force_load,${ARCHIVE_LIB}
+          LDID_FRAMEWORKS := -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation
+          LDID_SYSLIBS := -lz -liconv -lxml2
+          LDID_LDF := -Wl,-dead_strip \$(LDID_LIBS) \$(LDID_FRAMEWORKS) \$(LDID_SYSLIBS)
 
-          # 所有静态库用 -Wl,-force_load,<绝对路径>，避免链接顺序问题，也避免 Theos 不认识 _LDLIBS
-          LDID_LIBS := \\
-              -Wl,-force_load,${OPENSSL_LIBSSL} \\
-              -Wl,-force_load,${OPENSSL_LIBCRYPTO} \\
-              -Wl,-force_load,${PLIST_LIB} \\
-              -Wl,-force_load,${CURL_LIB} \\
-              -Wl,-force_load,${ARCHIVE_LIB}
-
-          LDID_FRAMEWORKS := \\
-              -framework Security \\
-              -framework CoreFoundation \\
-              -framework SystemConfiguration \\
-              -framework CFNetwork \\
-              -framework Foundation \\
-              -framework IOKit \\
-              -framework MobileCoreServices
-
-          LDID_SYSLIBS := -lz -llzma -lbz2 -liconv -lxml2 -lobjc
-
-          LDID_LDF := -Wl,-dead_strip -Wl,-no_warn_duplicate_libraries \$(LDID_LIBS) \$(LDID_FRAMEWORKS) \$(LDID_SYSLIBS)
-
-          ADDITIONAL_CFLAGS += \$(LDID_INC)
-          ADDITIONAL_CXXFLAGS += \$(LDID_INC) \$(LDID_CXXOPT)
+          ADDITIONAL_CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
+          ADDITIONAL_CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
           ADDITIONAL_LDFLAGS += \$(LDID_LDF)
 
-          CFLAGS += \$(LDID_INC)
-          CXXFLAGS += \$(LDID_INC) \$(LDID_CXXOPT)
+          CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
+          CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
           LDFLAGS += \$(LDID_LDF)
 
-          ldid_CFLAGS += \$(LDID_INC)
-          ldid_CXXFLAGS += \$(LDID_INC) \$(LDID_CXXOPT)
+          ldid_CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
+          ldid_CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
           ldid_LDFLAGS += \$(LDID_LDF)
 
           DEBUG := 0
@@ -307,16 +276,16 @@ jobs:
           set -e
 
           echo "make exit code: ${MAKE_RC}"
-          echo "===== Full build log ====="
-          cat /tmp/theos-build.log
+          echo "===== Full build log (last 200 lines) ====="
+          tail -n 200 /tmp/theos-build.log
+
+          echo
+          echo "===== Error lines ====="
+          grep -nE 'error:|Error [0-9]|No such file|not found|undefined|Undefined|ld: ' /tmp/theos-build.log | head -n 60 || true
 
           echo
           echo "===== Linker invocation ====="
           grep -nE 'clang(\+\+)? .*ldid' /tmp/theos-build.log | tail -n 3 || true
-
-          echo
-          echo "===== Undefined symbols ====="
-          grep -nA 80 'Undefined symbols' /tmp/theos-build.log | head -n 100 || true
 
           echo
           echo "===== Find built ldid ====="
@@ -333,7 +302,6 @@ jobs:
             echo "ERROR: built ldid not found"
             exit 1
           fi
-          echo "Using built binary: ${BUILT}"
           mkdir -p "${GITHUB_WORKSPACE}/build"
           cp "${BUILT}" "${GITHUB_WORKSPACE}/build/ldid"
           chmod 755 "${GITHUB_WORKSPACE}/build/ldid"
