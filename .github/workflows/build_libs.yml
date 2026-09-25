@@ -3,9 +3,7 @@ name: Build dylib
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "dylib.zip"
-      - ".github/workflows/build_dylib.yml"
+    
   pull_request:
     paths:
       - "dylib.zip"
@@ -16,7 +14,7 @@ permissions:
 
 env:
   IOS_DEPLOYMENT_TARGET: "13.0"
-  IOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-122e9c7/iPhoneOS16.5.sdk.tar.xz"
+  SDK_VERSION: "16.5"
 
 jobs:
   build:
@@ -60,34 +58,40 @@ jobs:
 
           echo "main.c: $MAIN_C"
           echo "Mod.c:  $MOD_C"
-      - name: Install iOS SDK
+
+      - name: Download iOS 16.5 SDK
         shell: bash
         run: |
           set -e
 
-          SDK_ARCHIVE="$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
-          SDK_ROOT="$RUNNER_TEMP/sdk"
+          SDK_ROOT="$RUNNER_TEMP/theos-sdk"
 
+          rm -rf "$SDK_ROOT"
           mkdir -p "$SDK_ROOT"
 
-          curl -L --fail --retry 3 \
-            "$IOS_SDK_URL" \
-            -o "$SDK_ARCHIVE"
+          git clone \
+            --depth=1 \
+            --filter=blob:none \
+            --sparse \
+            https://github.com/theos/sdks.git \
+            "$SDK_ROOT"
 
-          tar -xf "$SDK_ARCHIVE" -C "$SDK_ROOT"
+          cd "$SDK_ROOT"
 
-          SDK_PATH="$(find "$SDK_ROOT" -type d -name 'iPhoneOS*.sdk' -print -quit)"
+          git sparse-checkout set "iPhoneOS16.5.sdk"
 
-          if [ -z "$SDK_PATH" ]; then
-            echo "ERROR: iPhoneOS SDK not found"
-            find "$SDK_ROOT" -maxdepth 4 -print
+          SDK_PATH="$SDK_ROOT/iPhoneOS16.5.sdk"
+
+          if [ ! -d "$SDK_PATH" ]; then
+            echo "ERROR: iPhoneOS16.5.sdk was not found"
+            find "$SDK_ROOT" -maxdepth 2 -print
             exit 1
           fi
 
           echo "SDK_PATH=$SDK_PATH" >> "$GITHUB_ENV"
 
           echo "Using SDK:"
-          echo "$SDK_PATH"
+          ls -ld "$SDK_PATH"
 
       - name: Prepare substrate header
         shell: bash
@@ -212,11 +216,11 @@ jobs:
           file build/HKPerformance.dylib
           file build/HKMod.dylib
 
-          xcrun --sdk iphoneos lipo \
-            -info build/HKPerformance.dylib
+          xcrun lipo -info build/HKPerformance.dylib
+          xcrun lipo -info build/HKMod.dylib
 
-          xcrun --sdk iphoneos lipo \
-            -info build/HKMod.dylib
+          xcrun otool -hv build/HKPerformance.dylib
+          xcrun otool -hv build/HKMod.dylib
 
       - name: Strip binaries
         shell: bash
@@ -239,17 +243,19 @@ jobs:
 
           rm -f dylib.zip
 
-          (
-            cd package
-            zip -9 -q ../dylib.zip \
-              HKPerformance.dylib \
-              HKMod.dylib
-          )
+          cd package
 
-          echo "Generated:"
+          zip -9 -q ../dylib.zip \
+            HKPerformance.dylib \
+            HKMod.dylib
+
+          cd ..
+
+          echo "Generated dylib.zip:"
           ls -lh dylib.zip
 
-          echo "Archive:"
+          echo
+          echo "Archive contents:"
           unzip -l dylib.zip
 
       - name: Upload dylib.zip
