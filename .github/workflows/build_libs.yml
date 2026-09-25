@@ -55,12 +55,11 @@ jobs:
             exit 1
           fi
 
-          cp "$MAIN_C" source/main.c
-          cp "$MOD_C" source/Mod.c
+          echo "MAIN_C=$MAIN_C" >> "$GITHUB_ENV"
+          echo "MOD_C=$MOD_C" >> "$GITHUB_ENV"
 
-          echo "MAIN_C=source/main.c" >> "$GITHUB_ENV"
-          echo "MOD_C=source/Mod.c" >> "$GITHUB_ENV"
-
+          echo "main.c: $MAIN_C"
+          echo "Mod.c:  $MOD_C"
       - name: Install iOS SDK
         shell: bash
         run: |
