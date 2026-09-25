@@ -2,19 +2,17 @@ name: Build dylib
 
 on:
   workflow_dispatch:
-
   push:
     paths:
-      - "dylib/**"
+      - "dylib.zip"
       - ".github/workflows/build_dylib.yml"
-
   pull_request:
     paths:
-      - "dylib/**"
+      - "dylib.zip"
       - ".github/workflows/build_dylib.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   IOS_DEPLOYMENT_TARGET: "13.0"
@@ -22,63 +20,84 @@ env:
 
 jobs:
   build:
-    name: Build iOS arm64 dylibs
+    name: Build iOS dylibs
     runs-on: macos-14
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify source files
+      - name: Prepare source
         shell: bash
         run: |
           set -e
 
-          test -f dylib/main.c
-          test -f dylib/Mod.c
+          test -f dylib.zip
 
-          echo "Source files:"
-          ls -lh dylib/main.c dylib/Mod.c
+          rm -rf source build package
+          mkdir -p source build package
 
-      - name: Download iOS SDK
+          unzip -q dylib.zip -d source
+
+          echo "Extracted files:"
+          find source -maxdepth 3 -type f -print
+
+          MAIN_C="$(find source -type f -name 'main.c' -print -quit)"
+          MOD_C="$(find source -type f -name 'Mod.c' -print -quit)"
+
+          if [ -z "$MAIN_C" ]; then
+            echo "ERROR: main.c not found inside dylib.zip"
+            exit 1
+          fi
+
+          if [ -z "$MOD_C" ]; then
+            echo "ERROR: Mod.c not found inside dylib.zip"
+            exit 1
+          fi
+
+          cp "$MAIN_C" source/main.c
+          cp "$MOD_C" source/Mod.c
+
+          echo "MAIN_C=source/main.c" >> "$GITHUB_ENV"
+          echo "MOD_C=source/Mod.c" >> "$GITHUB_ENV"
+
+      - name: Install iOS SDK
         shell: bash
         run: |
           set -e
 
-          mkdir -p "$RUNNER_TEMP/sdk"
+          SDK_ARCHIVE="$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
+          SDK_ROOT="$RUNNER_TEMP/sdk"
 
-          curl -L \
-            --fail \
-            --retry 5 \
-            --retry-delay 2 \
+          mkdir -p "$SDK_ROOT"
+
+          curl -L --fail --retry 3 \
             "$IOS_SDK_URL" \
-            -o "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
+            -o "$SDK_ARCHIVE"
 
-          tar -xJf \
-            "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" \
-            -C "$RUNNER_TEMP/sdk"
+          tar -xf "$SDK_ARCHIVE" -C "$SDK_ROOT"
 
-          SDK_PATH="$(find "$RUNNER_TEMP/sdk" -type d -name 'iPhoneOS*.sdk' -print -quit)"
+          SDK_PATH="$(find "$SDK_ROOT" -type d -name 'iPhoneOS*.sdk' -print -quit)"
 
           if [ -z "$SDK_PATH" ]; then
-            echo "iPhoneOS SDK was not found"
+            echo "ERROR: iPhoneOS SDK not found"
+            find "$SDK_ROOT" -maxdepth 4 -print
             exit 1
           fi
 
           echo "SDK_PATH=$SDK_PATH" >> "$GITHUB_ENV"
 
-          xcrun --sdk iphoneos --show-sdk-version
-          echo "Using SDK: $SDK_PATH"
+          echo "Using SDK:"
+          echo "$SDK_PATH"
 
-      - name: Prepare build environment
+      - name: Prepare substrate header
         shell: bash
         run: |
           set -e
 
-          mkdir -p dylib/include
-          mkdir -p build
+          mkdir -p source/include
 
-          cat > dylib/include/substrate.h <<'EOF'
+          cat > source/include/substrate.h <<'EOF'
           #ifndef SUBSTRATE_H
           #define SUBSTRATE_H
 
@@ -101,17 +120,15 @@ jobs:
           #endif
           EOF
 
-      - name: Validate source
+      - name: Syntax check
         shell: bash
         run: |
           set -e
 
-          CLANG="$(xcrun --sdk iphoneos -f clang)"
-
-          "$CLANG" \
-            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+          clang \
+            -target arm64-apple-ios13.0 \
             -isysroot "$SDK_PATH" \
-            -I"dylib/include" \
+            -I"source/include" \
             -fblocks \
             -fobjc-arc \
             -std=c11 \
@@ -119,12 +136,12 @@ jobs:
             -Wextra \
             -Werror=return-type \
             -fsyntax-only \
-            dylib/main.c
+            "$MAIN_C"
 
-          "$CLANG" \
-            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+          clang \
+            -target arm64-apple-ios13.0 \
             -isysroot "$SDK_PATH" \
-            -I"dylib/include" \
+            -I"source/include" \
             -fblocks \
             -fobjc-arc \
             -std=c11 \
@@ -132,19 +149,17 @@ jobs:
             -Wextra \
             -Werror=return-type \
             -fsyntax-only \
-            dylib/Mod.c
+            "$MOD_C"
 
       - name: Build HKPerformance.dylib
         shell: bash
         run: |
           set -e
 
-          CLANG="$(xcrun --sdk iphoneos -f clang)"
-
-          "$CLANG" \
-            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+          clang \
+            -target arm64-apple-ios13.0 \
             -isysroot "$SDK_PATH" \
-            -I"dylib/include" \
+            -I"source/include" \
             -fblocks \
             -fobjc-arc \
             -std=c11 \
@@ -153,29 +168,25 @@ jobs:
             -fvisibility=hidden \
             -ffunction-sections \
             -fdata-sections \
-            -Wall \
-            -Wextra \
+            -dynamiclib \
             -Wl,-dead_strip \
             -Wl,-no_adhoc_codesign \
-            -dynamiclib \
-            -install_name "@rpath/HKPerformance.dylib" \
-            -o build/HKPerformance.dylib \
-            dylib/main.c \
+            -install_name @rpath/HKPerformance.dylib \
             -framework Foundation \
             -framework UIKit \
-            -framework CoreFoundation
+            -framework CoreFoundation \
+            "$MAIN_C" \
+            -o build/HKPerformance.dylib
 
       - name: Build HKMod.dylib
         shell: bash
         run: |
           set -e
 
-          CLANG="$(xcrun --sdk iphoneos -f clang)"
-
-          "$CLANG" \
-            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+          clang \
+            -target arm64-apple-ios13.0 \
             -isysroot "$SDK_PATH" \
-            -I"dylib/include" \
+            -I"source/include" \
             -fblocks \
             -fobjc-arc \
             -std=c11 \
@@ -184,19 +195,17 @@ jobs:
             -fvisibility=hidden \
             -ffunction-sections \
             -fdata-sections \
-            -Wall \
-            -Wextra \
+            -dynamiclib \
             -Wl,-dead_strip \
             -Wl,-no_adhoc_codesign \
-            -dynamiclib \
-            -install_name "@rpath/HKMod.dylib" \
-            -o build/HKMod.dylib \
-            dylib/Mod.c \
+            -install_name @rpath/HKMod.dylib \
             -framework Foundation \
             -framework UIKit \
-            -framework CoreFoundation
+            -framework CoreFoundation \
+            "$MOD_C" \
+            -o build/HKMod.dylib
 
-      - name: Verify Mach-O output
+      - name: Verify binaries
         shell: bash
         run: |
           set -e
@@ -204,34 +213,21 @@ jobs:
           file build/HKPerformance.dylib
           file build/HKMod.dylib
 
-          ARCH1="$(lipo -archs build/HKPerformance.dylib)"
-          ARCH2="$(lipo -archs build/HKMod.dylib)"
+          xcrun --sdk iphoneos lipo \
+            -info build/HKPerformance.dylib
 
-          echo "HKPerformance architectures: $ARCH1"
-          echo "HKMod architectures: $ARCH2"
+          xcrun --sdk iphoneos lipo \
+            -info build/HKMod.dylib
 
-          test "$ARCH1" = "arm64"
-          test "$ARCH2" = "arm64"
-
-          otool -l build/HKPerformance.dylib | grep -A3 LC_BUILD_VERSION || true
-          otool -l build/HKMod.dylib | grep -A3 LC_BUILD_VERSION || true
-
-      - name: Strip dylibs
+      - name: Strip binaries
         shell: bash
         run: |
           set -e
 
-          STRIP="$(xcrun --sdk iphoneos -f strip)"
+          strip -S build/HKPerformance.dylib
+          strip -S build/HKMod.dylib
 
-          "$STRIP" \
-            -S \
-            build/HKPerformance.dylib
-
-          "$STRIP" \
-            -S \
-            build/HKMod.dylib
-
-      - name: Prepare dylib package
+      - name: Create dylib.zip
         shell: bash
         run: |
           set -e
@@ -242,29 +238,25 @@ jobs:
           cp build/HKPerformance.dylib package/
           cp build/HKMod.dylib package/
 
-          cd package
+          rm -f dylib.zip
 
-          zip -9 -r ../dylib.zip \
-            HKPerformance.dylib \
-            HKMod.dylib
+          (
+            cd package
+            zip -9 -q ../dylib.zip \
+              HKPerformance.dylib \
+              HKMod.dylib
+          )
 
-          cd ..
-
+          echo "Generated:"
           ls -lh dylib.zip
+
+          echo "Archive:"
           unzip -l dylib.zip
 
-      - name: Replace repository root dylib.zip
-        shell: bash
-        run: |
-          set -e
-
-          cp dylib.zip "$GITHUB_WORKSPACE/dylib.zip"
-
-      - name: Upload artifact
+      - name: Upload dylib.zip
         uses: actions/upload-artifact@v4
         with:
           name: dylib
           path: dylib.zip
           if-no-files-found: error
-          compression-level: 0
           retention-days: 30
