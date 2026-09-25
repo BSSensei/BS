@@ -93,7 +93,7 @@ jobs:
           echo "Using SDK:"
           ls -ld "$SDK_PATH"
 
-      - name: Prepare substrate header
+      - name: Prepare headers
         shell: bash
         run: |
           set -e
@@ -104,8 +104,6 @@ jobs:
           #ifndef SUBSTRATE_H
           #define SUBSTRATE_H
 
-          #include <stdint.h>
-
           #ifdef __cplusplus
           extern "C" {
           #endif
@@ -114,7 +112,7 @@ jobs:
               void *symbol,
               void *replace,
               void **result
-          ) __attribute__((weak_import));
+          );
 
           #ifdef __cplusplus
           }
@@ -123,7 +121,7 @@ jobs:
           #endif
           EOF
 
-      - name: Syntax check
+      - name: Syntax check main.c
         shell: bash
         run: |
           set -e
@@ -140,6 +138,11 @@ jobs:
             -Werror=return-type \
             -fsyntax-only \
             "$MAIN_C"
+
+      - name: Syntax check Mod.c
+        shell: bash
+        run: |
+          set -e
 
           clang \
             -target arm64-apple-ios13.0 \
@@ -173,6 +176,7 @@ jobs:
             -fdata-sections \
             -dynamiclib \
             -Wl,-dead_strip \
+            -Wl,-undefined,dynamic_lookup \
             -Wl,-no_adhoc_codesign \
             -install_name @rpath/HKPerformance.dylib \
             -framework Foundation \
@@ -200,6 +204,7 @@ jobs:
             -fdata-sections \
             -dynamiclib \
             -Wl,-dead_strip \
+            -Wl,-undefined,dynamic_lookup \
             -Wl,-no_adhoc_codesign \
             -install_name @rpath/HKMod.dylib \
             -framework Foundation \
@@ -213,14 +218,31 @@ jobs:
         run: |
           set -e
 
+          test -f build/HKPerformance.dylib
+          test -f build/HKMod.dylib
+
+          echo "HKPerformance:"
           file build/HKPerformance.dylib
-          file build/HKMod.dylib
-
           xcrun lipo -info build/HKPerformance.dylib
-          xcrun lipo -info build/HKMod.dylib
-
           xcrun otool -hv build/HKPerformance.dylib
+
+          echo
+          echo "HKMod:"
+          file build/HKMod.dylib
+          xcrun lipo -info build/HKMod.dylib
           xcrun otool -hv build/HKMod.dylib
+
+      - name: Verify MSHookFunction
+        shell: bash
+        run: |
+          set -e
+
+          echo "HKPerformance MSHookFunction:"
+          xcrun nm -u build/HKPerformance.dylib | grep "_MSHookFunction"
+
+          echo
+          echo "HKMod MSHookFunction:"
+          xcrun nm -u build/HKMod.dylib | grep "_MSHookFunction"
 
       - name: Strip binaries
         shell: bash
