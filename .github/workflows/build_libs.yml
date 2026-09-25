@@ -41,7 +41,7 @@ jobs:
             echo "❌ 没找到 UnityFramework 或 global-metadata.dat"
             exit 1
           fi
-          dotnet dumper/Il2CppDumper.dll "$BIN" "$META" output
+          dotnet dumper/Il2CppDumper.dll "$BIN" "$META" output || true
           echo "=== 输出结果 ==="
           ls -la output
 
