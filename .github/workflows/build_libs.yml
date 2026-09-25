@@ -1,52 +1,270 @@
-name: IL2CPP Reverse
+name: Build dylib
 
 on:
-  push:
-    
   workflow_dispatch:
 
+  push:
+    paths:
+      - "dylib/**"
+      - ".github/workflows/build_dylib.yml"
+
+  pull_request:
+    paths:
+      - "dylib/**"
+      - ".github/workflows/build_dylib.yml"
+
+permissions:
+  contents: write
+
+env:
+  IOS_DEPLOYMENT_TARGET: "13.0"
+  IOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-122e9c7/iPhoneOS16.5.sdk.tar.xz"
+
 jobs:
-  dump:
-    runs-on: ubuntu-latest
+  build:
+    name: Build iOS arm64 dylibs
+    runs-on: macos-14
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '6.0.x'
-
-      - name: Extract zip
+      - name: Verify source files
+        shell: bash
         run: |
-          mkdir -p input
-          unzip -o 逆向.zip -d input
-          echo "=== 文件列表 ==="
-          find input -type f
+          set -e
 
-      - name: Download Il2CppDumper
-        run: |
-          wget https://github.com/Perfare/Il2CppDumper/releases/download/v6.7.46/Il2CppDumper-net6-v6.7.46.zip -O dumper.zip
-          unzip -o dumper.zip -d dumper
-          ls -la dumper
+          test -f dylib/main.c
+          test -f dylib/Mod.c
 
-      - name: Run Il2CppDumper
+          echo "Source files:"
+          ls -lh dylib/main.c dylib/Mod.c
+
+      - name: Download iOS SDK
+        shell: bash
         run: |
-          mkdir -p output
-          BIN=$(find input -name "UnityFramework" -type f | head -n 1)
-          META=$(find input -name "global-metadata.dat" -type f | head -n 1)
-          echo "Binary: $BIN"
-          echo "Metadata: $META"
-          if [ -z "$BIN" ] || [ -z "$META" ]; then
-            echo "❌ 没找到 UnityFramework 或 global-metadata.dat"
+          set -e
+
+          mkdir -p "$RUNNER_TEMP/sdk"
+
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-delay 2 \
+            "$IOS_SDK_URL" \
+            -o "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
+
+          tar -xJf \
+            "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" \
+            -C "$RUNNER_TEMP/sdk"
+
+          SDK_PATH="$(find "$RUNNER_TEMP/sdk" -type d -name 'iPhoneOS*.sdk' -print -quit)"
+
+          if [ -z "$SDK_PATH" ]; then
+            echo "iPhoneOS SDK was not found"
             exit 1
           fi
-          dotnet dumper/Il2CppDumper.dll "$BIN" "$META" output || true
-          echo "=== 输出结果 ==="
-          ls -la output
 
-      - name: Upload result
+          echo "SDK_PATH=$SDK_PATH" >> "$GITHUB_ENV"
+
+          xcrun --sdk iphoneos --show-sdk-version
+          echo "Using SDK: $SDK_PATH"
+
+      - name: Prepare build environment
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p dylib/include
+          mkdir -p build
+
+          cat > dylib/include/substrate.h <<'EOF'
+          #ifndef SUBSTRATE_H
+          #define SUBSTRATE_H
+
+          #include <stdint.h>
+
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+
+          void MSHookFunction(
+              void *symbol,
+              void *replace,
+              void **result
+          ) __attribute__((weak_import));
+
+          #ifdef __cplusplus
+          }
+          #endif
+
+          #endif
+          EOF
+
+      - name: Validate source
+        shell: bash
+        run: |
+          set -e
+
+          CLANG="$(xcrun --sdk iphoneos -f clang)"
+
+          "$CLANG" \
+            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+            -isysroot "$SDK_PATH" \
+            -I"dylib/include" \
+            -fblocks \
+            -fobjc-arc \
+            -std=c11 \
+            -Wall \
+            -Wextra \
+            -Werror=return-type \
+            -fsyntax-only \
+            dylib/main.c
+
+          "$CLANG" \
+            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+            -isysroot "$SDK_PATH" \
+            -I"dylib/include" \
+            -fblocks \
+            -fobjc-arc \
+            -std=c11 \
+            -Wall \
+            -Wextra \
+            -Werror=return-type \
+            -fsyntax-only \
+            dylib/Mod.c
+
+      - name: Build HKPerformance.dylib
+        shell: bash
+        run: |
+          set -e
+
+          CLANG="$(xcrun --sdk iphoneos -f clang)"
+
+          "$CLANG" \
+            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+            -isysroot "$SDK_PATH" \
+            -I"dylib/include" \
+            -fblocks \
+            -fobjc-arc \
+            -std=c11 \
+            -O3 \
+            -flto \
+            -fvisibility=hidden \
+            -ffunction-sections \
+            -fdata-sections \
+            -Wall \
+            -Wextra \
+            -Wl,-dead_strip \
+            -Wl,-no_adhoc_codesign \
+            -dynamiclib \
+            -install_name "@rpath/HKPerformance.dylib" \
+            -o build/HKPerformance.dylib \
+            dylib/main.c \
+            -framework Foundation \
+            -framework UIKit \
+            -framework CoreFoundation
+
+      - name: Build HKMod.dylib
+        shell: bash
+        run: |
+          set -e
+
+          CLANG="$(xcrun --sdk iphoneos -f clang)"
+
+          "$CLANG" \
+            -target arm64-apple-ios${IOS_DEPLOYMENT_TARGET} \
+            -isysroot "$SDK_PATH" \
+            -I"dylib/include" \
+            -fblocks \
+            -fobjc-arc \
+            -std=c11 \
+            -O3 \
+            -flto \
+            -fvisibility=hidden \
+            -ffunction-sections \
+            -fdata-sections \
+            -Wall \
+            -Wextra \
+            -Wl,-dead_strip \
+            -Wl,-no_adhoc_codesign \
+            -dynamiclib \
+            -install_name "@rpath/HKMod.dylib" \
+            -o build/HKMod.dylib \
+            dylib/Mod.c \
+            -framework Foundation \
+            -framework UIKit \
+            -framework CoreFoundation
+
+      - name: Verify Mach-O output
+        shell: bash
+        run: |
+          set -e
+
+          file build/HKPerformance.dylib
+          file build/HKMod.dylib
+
+          ARCH1="$(lipo -archs build/HKPerformance.dylib)"
+          ARCH2="$(lipo -archs build/HKMod.dylib)"
+
+          echo "HKPerformance architectures: $ARCH1"
+          echo "HKMod architectures: $ARCH2"
+
+          test "$ARCH1" = "arm64"
+          test "$ARCH2" = "arm64"
+
+          otool -l build/HKPerformance.dylib | grep -A3 LC_BUILD_VERSION || true
+          otool -l build/HKMod.dylib | grep -A3 LC_BUILD_VERSION || true
+
+      - name: Strip dylibs
+        shell: bash
+        run: |
+          set -e
+
+          STRIP="$(xcrun --sdk iphoneos -f strip)"
+
+          "$STRIP" \
+            -S \
+            build/HKPerformance.dylib
+
+          "$STRIP" \
+            -S \
+            build/HKMod.dylib
+
+      - name: Prepare dylib package
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf package
+          mkdir -p package
+
+          cp build/HKPerformance.dylib package/
+          cp build/HKMod.dylib package/
+
+          cd package
+
+          zip -9 -r ../dylib.zip \
+            HKPerformance.dylib \
+            HKMod.dylib
+
+          cd ..
+
+          ls -lh dylib.zip
+          unzip -l dylib.zip
+
+      - name: Replace repository root dylib.zip
+        shell: bash
+        run: |
+          set -e
+
+          cp dylib.zip "$GITHUB_WORKSPACE/dylib.zip"
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: il2cpp-dump
-          path: output/
+          name: dylib
+          path: dylib.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
