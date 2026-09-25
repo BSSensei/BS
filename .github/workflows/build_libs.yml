@@ -1,312 +1,54 @@
-name: Build ldid
+name: IL2CPP Reverse
 
 on:
-  workflow_dispatch:
   push:
     paths:
-      - "ldid.zip"
-      - ".github/workflows/build_libs.yml"
-  pull_request:
-    paths:
-      - "ldid.zip"
-      - ".github/workflows/build_libs.yml"
-
-permissions:
-  contents: read
-
-env:
-  IOS_SDK_VERSION: "16.5"
-  IOS_DEPLOYMENT_TARGET: "16.0"
-  THEOS_REPO: "https://github.com/theos/theos.git"
-  THEOS_SDK_URL: "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
-  CURL_URL: "https://github.com/XDcobra/libcurl-ios-prebuilt-and-buildscripts/releases/download/curl-8_17_0/libcurl_artifact.zip"
-  CURL_SOURCE_URL: "https://curl.se/download/curl-8.17.0.tar.xz"
-  LIBARCHIVE_REPO: "https://github.com/okferret/libarchive.git"
+      - '逆向.zip'
+  workflow_dispatch:
 
 jobs:
-  build-ios-arm64:
-    name: iOS arm64 / Theos / iOS 16.5
-    runs-on: macos-14
+  dump:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show host toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          sw_vers
-          xcodebuild -version
-          xcode-select -p
-          clang --version
-          sysctl -n hw.logicalcpu_max
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
 
-      - name: Prepare source
-        shell: bash
+      - name: Extract zip
         run: |
-          set -euo pipefail
-          rm -rf source
-          mkdir -p source
-          unzip -q ldid.zip -d source
-          test -f source/ldid.cpp
-          test -f source/ldid.hpp
-          test -d source/libplist_include
-          test -d source/libplist_lib
-          test -d source/openssl_include
-          test -d source/openssl_lib
-          test -f source/openssl_lib/libcrypto.a
-          test -f source/openssl_lib/libssl.a
-          file source/openssl_lib/libcrypto.a
-          file source/openssl_lib/libssl.a
-          file source/libplist_lib/libplist-2.0.a
+          mkdir -p input
+          unzip -o 逆向.zip -d input
+          echo "=== 文件列表 ==="
+          find input -type f
 
-      - name: Setup Theos and iOS SDK
-        shell: bash
+      - name: Download Il2CppDumper
         run: |
-          set -euo pipefail
-          export THEOS="${GITHUB_WORKSPACE}/theos"
-          rm -rf "${THEOS}"
-          git clone --depth 1 "${THEOS_REPO}" "${THEOS}"
-          test -f "${THEOS}/makefiles/common.mk"
-          git -C "${THEOS}" submodule update --init --recursive || true
-          mkdir -p "${THEOS}/sdks" "${THEOS}/vendor"
-          SDK_DIR="${THEOS}/sdks/iPhoneOS${IOS_SDK_VERSION}.sdk"
-          curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
-            "${THEOS_SDK_URL}" -o /tmp/iPhoneOS16.5.sdk.tar.xz
-          tar -xJf /tmp/iPhoneOS16.5.sdk.tar.xz -C "${THEOS}/sdks"
-          test -d "${SDK_DIR}"
-          test -f "${SDK_DIR}/SDKSettings.plist"
-          echo "THEOS=${THEOS}" >> "${GITHUB_ENV}"
+          wget https://github.com/Perfare/Il2CppDumper/releases/download/v6.7.46/Il2CppDumper-net6-v6.7.46.zip -O dumper.zip
+          unzip -o dumper.zip -d dumper
+          chmod +x dumper/Il2CppDumper
+          ls -la dumper
 
-      - name: Install ldid for codesigning
-        shell: bash
+      - name: Run Il2CppDumper
         run: |
-          set -euo pipefail
-          brew install ldid 2>/dev/null || brew upgrade ldid 2>/dev/null || true
-          which ldid
-          ldid -h 2>&1 | head -n 2 || true
-
-      - name: Download libcurl + headers + libarchive
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf third_party
-          mkdir -p third_party/curl
-
-          HTTP_CODE="$(curl -sSL -w '%{http_code}' -o /tmp/libcurl_artifact.zip "${CURL_URL}" || echo '000')"
-          echo "curl HTTP code: ${HTTP_CODE}"
-          if [ "${HTTP_CODE}" != "200" ]; then
-            echo "ERROR: libcurl download failed (HTTP ${HTTP_CODE})"
+          mkdir -p output
+          BIN=$(find input -name "UnityFramework" -type f | head -n 1)
+          META=$(find input -name "global-metadata.dat" -type f | head -n 1)
+          echo "Binary: $BIN"
+          echo "Metadata: $META"
+          if [ -z "$BIN" ] || [ -z "$META" ]; then
+            echo "❌ 没找到 UnityFramework 或 global-metadata.dat"
             exit 1
           fi
-          unzip -q -o /tmp/libcurl_artifact.zip -d third_party/curl
+          ./dumper/Il2CppDumper "$BIN" "$META" output
+          echo "=== 输出结果 ==="
+          ls -la output
 
-          rm -rf /tmp/curl-source
-          mkdir -p /tmp/curl-source
-          curl -fL --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
-            "${CURL_SOURCE_URL}" -o /tmp/curl-8.17.0.tar.xz
-          tar -xJf /tmp/curl-8.17.0.tar.xz -C /tmp/curl-source
-          mkdir -p third_party/curl-headers
-          cp -R /tmp/curl-source/curl-8.17.0/include/curl third_party/curl-headers/
-          test -f third_party/curl-headers/curl/curl.h
-
-          git clone --depth 1 "${LIBARCHIVE_REPO}" third_party/libarchive
-
-      - name: Normalize libplist header names
-        shell: bash
-        run: |
-          set -euo pipefail
-          find source/libplist_include -type f -name '*.h'   -print > /tmp/hdrs.txt
-          find source/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs.txt
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            dir="$(dirname "$f")"
-            base="$(basename "$f")"
-            lower="$(printf '%s' "$base" | tr 'A-Z' 'a-z')"
-            if [ "$base" != "$lower" ] && [ ! -e "${dir}/${lower}" ]; then
-              cp "${f}" "${dir}/${lower}"
-            fi
-          done < /tmp/hdrs.txt
-          test -f source/libplist_include/plist/string.h
-
-      - name: Detect dependency paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          WS="${GITHUB_WORKSPACE}"
-
-          OPENSSL_INCLUDE_ROOT="${WS}/source/openssl_include"
-          OPENSSL_LIBCRYPTO="${WS}/source/openssl_lib/libcrypto.a"
-          OPENSSL_LIBSSL="${WS}/source/openssl_lib/libssl.a"
-          test -f "${OPENSSL_INCLUDE_ROOT}/openssl/evp.h"
-          test -f "${OPENSSL_LIBCRYPTO}"
-          test -f "${OPENSSL_LIBSSL}"
-
-          CURL_LIB="$(find "${WS}/third_party/curl" -type f -path '*/ios-arm64/libcurl.a' -print -quit)"
-          [ -z "${CURL_LIB}" ] && CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' ! -path '*simulator*' -print -quit)"
-          [ -z "${CURL_LIB}" ] && CURL_LIB="$(find "${WS}/third_party/curl" -type f -name 'libcurl.a' -print -quit)"
-          test -n "${CURL_LIB}"
-          CURL_INCLUDE_DIR="${WS}/third_party/curl-headers"
-          test -f "${CURL_INCLUDE_DIR}/curl/curl.h"
-
-          ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -path '*/ios-arm64/libarchive.a' -print -quit)"
-          [ -z "${ARCHIVE_LIB}" ] && ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' ! -path '*simulator*' -print -quit)"
-          [ -z "${ARCHIVE_LIB}" ] && ARCHIVE_LIB="$(find "${WS}/third_party/libarchive" -type f -name 'libarchive.a' -print -quit)"
-          test -n "${ARCHIVE_LIB}"
-          ARCHIVE_INCLUDE="$(find "${WS}/third_party/libarchive" -type f -name 'archive.h' -print -quit)"
-          ARCHIVE_INCLUDE_DIR="$(dirname "${ARCHIVE_INCLUDE}")"
-          test -f "${ARCHIVE_INCLUDE_DIR}/archive.h"
-
-          PLIST_INCLUDE_DIR="${WS}/source/libplist_include"
-          PLIST_LIB="${WS}/source/libplist_lib/libplist-2.0.a"
-          test -f "${PLIST_LIB}"
-
-          {
-            echo "OPENSSL_INCLUDE_ROOT=${OPENSSL_INCLUDE_ROOT}"
-            echo "OPENSSL_LIBCRYPTO=${OPENSSL_LIBCRYPTO}"
-            echo "OPENSSL_LIBSSL=${OPENSSL_LIBSSL}"
-            echo "CURL_LIB=${CURL_LIB}"
-            echo "CURL_INCLUDE_DIR=${CURL_INCLUDE_DIR}"
-            echo "ARCHIVE_LIB=${ARCHIVE_LIB}"
-            echo "ARCHIVE_INCLUDE_DIR=${ARCHIVE_INCLUDE_DIR}"
-            echo "PLIST_LIB=${PLIST_LIB}"
-            echo "PLIST_INCLUDE_DIR=${PLIST_INCLUDE_DIR}"
-          } >> "${GITHUB_ENV}"
-
-          echo "===== Detected ====="
-          grep -E '^(OPENSSL_|CURL_|ARCHIVE_|PLIST_)' "${GITHUB_ENV}" || true
-
-      - name: Prepare Theos project
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf theos-build
-          mkdir -p theos-build
-          cp source/ldid.cpp theos-build/ldid.cpp
-          cp source/ldid.hpp theos-build/ldid.hpp
-          cp -R source/libplist_include theos-build/libplist_include
-          cp -R source/libplist_lib     theos-build/libplist_lib
-
-          find theos-build/libplist_include -type f -name '*.h'   -print > /tmp/hdrs2.txt
-          find theos-build/libplist_include -type f -name '*.hpp' -print >> /tmp/hdrs2.txt
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            dir="$(dirname "$f")"
-            base="$(basename "$f")"
-            lower="$(printf '%s' "$base" | tr 'A-Z' 'a-z')"
-            if [ "$base" != "$lower" ] && [ ! -e "${dir}/${lower}" ]; then
-              cp "${f}" "${dir}/${lower}"
-            fi
-          done < /tmp/hdrs2.txt
-
-          cat > theos-build/Makefile <<EOF
-          THEOS ?= ${THEOS}
-          TARGET := iphone:clang:16.5:16.0
-          ARCHS := arm64
-          TOOL_NAME := ldid
-          ldid_FILES := ldid.cpp
-
-          LDID_INC := -I${PLIST_INCLUDE_DIR} -I${OPENSSL_INCLUDE_ROOT} -I${CURL_INCLUDE_DIR} -I${ARCHIVE_INCLUDE_DIR}
-          LDID_LIBS := -Wl,-force_load,${OPENSSL_LIBSSL} -Wl,-force_load,${OPENSSL_LIBCRYPTO} -Wl,-force_load,${PLIST_LIB} -Wl,-force_load,${CURL_LIB} -Wl,-force_load,${ARCHIVE_LIB}
-          LDID_FRAMEWORKS := -framework Security -framework CoreFoundation -framework SystemConfiguration -framework CFNetwork -framework Foundation
-          LDID_SYSLIBS := -lz -lbz2 -liconv -lxml2
-          LDID_WEAK := -Wl,-U,_SSL_CTX_set_srp_password -Wl,-U,_SSL_CTX_set_srp_username -Wl,-U,_UI_OpenSSL
-
-          LDID_LDF := -Wl,-dead_strip \$(LDID_LIBS) \$(LDID_FRAMEWORKS) \$(LDID_SYSLIBS) \$(LDID_WEAK) -Wl,-undefined,error -Wl,-no_warn_duplicate_libraries
-
-          CFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
-          CXXFLAGS += \$(LDID_INC) -std=c++20 -O3 -DNDEBUG -fvisibility=hidden -Wno-error
-          LDFLAGS += \$(LDID_LDF)
-
-          DEBUG := 0
-          FINALPACKAGE := 1
-
-          include \$(THEOS)/makefiles/common.mk
-          include \$(THEOS_MAKE_PATH)/tool.mk
-          EOF
-
-          cat theos-build/Makefile
-
-      - name: Build with Theos
-        shell: bash
-        run: |
-          cd theos-build
-          make clean || true
-          set +e
-          make \
-            THEOS="${THEOS}" \
-            TARGET="iphone:clang:16.5:16.0" \
-            ARCHS="arm64" \
-            DEBUG=0 \
-            FINALPACKAGE=1 \
-            QUIET= \
-            _THEOS_VERBOSE=1 \
-            -j"$(sysctl -n hw.logicalcpu_max)" \
-            > /tmp/theos-build.log 2>&1
-          MAKE_RC=$?
-          set -e
-
-          echo "make exit code: ${MAKE_RC}"
-          echo "===== Full build log (last 200 lines) ====="
-          tail -n 200 /tmp/theos-build.log
-
-          echo
-          echo "===== Warnings / Errors ====="
-          grep -nE 'warning:|error:|Error [0-9]|ld: ' /tmp/theos-build.log | head -n 60 || true
-
-          echo
-          echo "===== Find built ldid ====="
-          find . -type f -name 'ldid' -print | sort
-
-          if [ "${MAKE_RC}" -ne 0 ]; then
-            echo "ERROR: make failed with exit code ${MAKE_RC}"
-            exit "${MAKE_RC}"
-          fi
-
-          BUILT="$(find . -type f -name 'ldid' -perm -u+x -print | head -n 1)"
-          [ -z "${BUILT}" ] && BUILT="$(find . -type f -name 'ldid' -print | head -n 1)"
-          if [ -z "${BUILT}" ]; then
-            echo "ERROR: built ldid not found"
-            exit 1
-          fi
-          mkdir -p "${GITHUB_WORKSPACE}/build"
-          cp "${BUILT}" "${GITHUB_WORKSPACE}/build/ldid"
-          chmod 755 "${GITHUB_WORKSPACE}/build/ldid"
-
-      - name: Validate final binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          BINARY="${GITHUB_WORKSPACE}/build/ldid"
-          test -x "${BINARY}"
-          file "${BINARY}"
-          lipo -info "${BINARY}"
-          xcrun otool -hv "${BINARY}"
-          xcrun otool -L "${BINARY}"
-          xcrun nm -u "${BINARY}" | head -n 40 || true
-
-      - name: Package
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf dist
-          mkdir -p dist
-          cp build/ldid dist/ldid
-          chmod 755 dist/ldid
-          cd dist
-          zip -9 -q ldid-ios-arm64.zip ldid
-          file ldid
-          lipo -info ldid
-          shasum -a 256 ldid
-          shasum -a 256 ldid-ios-arm64.zip
-          ls -lh ldid ldid-ios-arm64.zip
-
-      - name: Upload artifact
+      - name: Upload result
         uses: actions/upload-artifact@v4
         with:
-          name: ldid-ios-arm64
-          path: |
-            dist/ldid
-            dist/ldid-ios-arm64.zip
-          if-no-files-found: error
-          retention-days: 14
+          name: il2cpp-dump
+          path: output/
